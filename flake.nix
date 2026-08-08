@@ -43,6 +43,7 @@
             [
               nodejs_22
               git
+              gh
               nixfmt
             ]
             ++ pre-commit-check.enabledPackages;
