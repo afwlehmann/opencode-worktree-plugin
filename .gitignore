@@ -1,0 +1,10 @@
+node_modules/
+dist/
+result
+.opencode/
+opencode.json
+opencode.jsonc
+.pre-commit-config.yaml
+.idea/
+.vscode/
+*.log
