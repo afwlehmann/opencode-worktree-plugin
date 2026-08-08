@@ -18,6 +18,7 @@
       system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
+        inherit (pkgs) lib;
 
         pre-commit-check = git-hooks.lib.${system}.run {
           src = ./.;
@@ -30,10 +31,42 @@
             };
           };
         };
+
+        package = pkgs.buildNpmPackage {
+          pname = "opencode-worktree-plugin";
+          version = "0.1.1";
+          src = ./.;
+          npmDepsHash = "sha256-eZvYxJsD7mUTpZp1rnWCKBC8gUB6MhhIKLvhggoRmpA=";
+          npmDepsFetcherVersion = 2;
+          makeCacheWritable = true;
+          npmFlags = [ "--legacy-peer-deps" ];
+          nodejs = pkgs.nodejs_22;
+          installPhase = ''
+            runHook preInstall
+            mkdir -p $out
+            cp -r dist $out/dist
+            runHook postInstall
+          '';
+          doInstallCheck = true;
+          installCheckPhase = ''
+            runHook preInstallCheck
+            test -f $out/dist/index.js
+            test -f $out/dist/tui.js
+            runHook postInstallCheck
+          '';
+          meta = {
+            description = "Git worktree management plugin for opencode";
+            license = lib.licenses.mit;
+            platforms = lib.platforms.all;
+          };
+        };
       in
       {
+        packages.default = package;
+
         checks = {
           inherit pre-commit-check;
+          package-build = package;
         };
 
         devShells.default = pkgs.mkShell {
