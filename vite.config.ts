@@ -22,6 +22,8 @@ export default defineConfig({
         "@opentui/core",
         "@opentui/solid",
         "solid-js",
+        "effect",
+        "effect/Function",
         "bun",
       ],
     },

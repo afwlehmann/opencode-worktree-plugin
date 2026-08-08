@@ -1,6 +1,6 @@
 {
   "name": "opencode-worktree-plugin",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Git worktree management plugin for opencode — create, merge, and remove worktrees with dynamic permissions and TUI status bar",
   "type": "module",
   "license": "MIT",
@@ -30,7 +30,8 @@
   },
   "dependencies": {
     "@opencode-ai/plugin": "^1.18.15",
-    "@opencode-ai/sdk": "^1.18.15"
+    "@opencode-ai/sdk": "^1.18.15",
+    "effect": "^4.0.0-beta.83"
   },
   "peerDependencies": {
     "@opentui/core": ">=0.4.5",

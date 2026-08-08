@@ -14,14 +14,14 @@ import {
 describe("either", () => {
   it("left creates a Left either", () => {
     const result = left("error")
-    expect(result._tag).toBe("Left")
+    expect(result._tag).toBe("Failure")
     expect(isLeft(result)).toBe(true)
     expect(isRight(result)).toBe(false)
   })
 
   it("right creates a Right either", () => {
     const result = right(42)
-    expect(result._tag).toBe("Right")
+    expect(result._tag).toBe("Success")
     expect(isRight(result)).toBe(true)
     expect(isLeft(result)).toBe(false)
   })
@@ -29,7 +29,7 @@ describe("either", () => {
   it("map transforms Right value", () => {
     const result = map(right(5), (n) => n * 2)
     expect(isRight(result)).toBe(true)
-    if (isRight(result)) expect(result.value).toBe(10)
+    if (isRight(result)) expect(result.success).toBe(10)
   })
 
   it("map does not transform Left", () => {
@@ -40,7 +40,7 @@ describe("either", () => {
   it("flatMap chains Right", () => {
     const result = flatMap(right(5), (n) => right(n + 1))
     expect(isRight(result)).toBe(true)
-    if (isRight(result)) expect(result.value).toBe(6)
+    if (isRight(result)) expect(result.success).toBe(6)
   })
 
   it("flatMap propagates Left", () => {
@@ -51,7 +51,7 @@ describe("either", () => {
   it("mapError transforms Left error", () => {
     const result = mapError(left("err"), (e) => e.toUpperCase())
     expect(isLeft(result)).toBe(true)
-    if (isLeft(result)) expect(result.error).toBe("ERR")
+    if (isLeft(result)) expect(result.failure).toBe("ERR")
   })
 })
 
