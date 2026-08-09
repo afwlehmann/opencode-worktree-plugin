@@ -1,0 +1,28 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {
+    "*": "ask",
+    "edit": {
+      "*": "allow"
+    },
+    "bash": {
+      "*": "ask",
+      "nix develop -c npm run build": "allow",
+      "nix develop -c npm run build *": "allow",
+      "nix develop -c npm run format": "allow",
+      "nix develop -c npm run format *": "allow",
+      "nix develop -c npm run format:check": "allow",
+      "nix develop -c npm run format:check *": "allow",
+      "nix develop -c npm run lint": "allow",
+      "nix develop -c npm run lint *": "allow",
+      "nix develop -c npm run typecheck": "allow",
+      "nix develop -c npm run typecheck *": "allow",
+      "nix develop -c npm test": "allow",
+      "nix develop -c npm test *": "allow",
+      "nix develop -c npm run test:watch": "allow",
+      "nix develop -c npm run test:watch *": "allow",
+      "npx *": "deny",
+      "npm *": "deny"
+    }
+  }
+}
