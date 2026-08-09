@@ -40,12 +40,15 @@ export type CreateWorktreeDeps = {
 export const createWorktreeTool = (deps: CreateWorktreeDeps) =>
   tool({
     description:
-      "Create a git worktree for a repository. The worktree is created under " +
-      "${XDG_STATE_HOME}/opencode/worktrees/<repo-short>-<branch>. " +
-      "Creates a new branch from the target branch (default: main). " +
-      "If a gitignored/untracked .opencode/ directory exists in the source repo, " +
-      "the user will be prompted to copy it into the worktree. " +
-      "Dynamic permissions are updated to allow agent access to the worktree.",
+      "Prefer this tool over raw `git worktree add`. Create a git worktree for a " +
+      "repository, created under ${XDG_STATE_HOME}/opencode/worktrees/<repo-short>-<branch>. " +
+      "Creates a new branch from the target branch (default: main). Side effects " +
+      "that raw git would skip: (1) external_directory permissions are updated so " +
+      "the agent can access the worktree path, (2) a gitignored/untracked .opencode/ " +
+      "directory is detected and the user is prompted to copy it into the worktree, " +
+      "(3) the worktree path is tracked for the permission hook. Workflow: call this " +
+      "first, then work in the returned path, then call worktree_merge (to fold back) " +
+      "or worktree_remove (to discard).",
     args: {
       repo_short: tool.schema
         .string()
