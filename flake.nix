@@ -34,9 +34,9 @@
 
         package = pkgs.buildNpmPackage {
           pname = "opencode-worktree-plugin";
-          version = "0.2.1";
+          version = "0.2.2";
           src = ./.;
-          npmDepsHash = "sha256-oA1lUXiuQTFv8VJuEgeEKyrX5QTl/oQLEhbXK1TeYdY=";
+          npmDepsHash = "sha256-udTHE/ZAZyefLuW8SMTeW56FwNBfIxzQmDYrg3TfJA0=";
           npmDepsFetcherVersion = 2;
           makeCacheWritable = true;
           npmFlags = [ "--legacy-peer-deps" ];
@@ -45,6 +45,7 @@
             runHook preInstall
             mkdir -p $out
             cp -r dist $out/dist
+            cp package.json $out/package.json
             runHook postInstall
           '';
           doInstallCheck = true;
@@ -52,6 +53,7 @@
             runHook preInstallCheck
             test -f $out/dist/index.js
             test -f $out/dist/tui.js
+            test -f $out/package.json
             runHook postInstallCheck
           '';
           meta = {
