@@ -80,6 +80,8 @@
               git
               gh
               nixfmt
+              nixd
+              typescript-language-server
             ]
             ++ pre-commit-check.enabledPackages;
         };
