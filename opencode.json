@@ -1,8 +1,12 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "lsp": {
-    "typescript": {},
-    "nixd": {}
+    "typescript": {
+      "command": ["nix", "develop", "-c", "typescript-language-server", "--stdio"]
+    },
+    "nixd": {
+      "command": ["nix", "develop", "-c", "nixd"]
+    }
   },
   "permission": {
     "*": "ask",
