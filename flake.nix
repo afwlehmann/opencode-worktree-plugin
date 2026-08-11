@@ -43,17 +43,17 @@
           nodejs = pkgs.nodejs_22;
           installPhase = ''
             runHook preInstall
-            mkdir -p $out
-            cp -r dist $out/dist
-            cp package.json $out/package.json
+            mkdir -p $out/lib/node_modules/opencode-worktree-plugin
+            cp -r dist $out/lib/node_modules/opencode-worktree-plugin/dist
+            cp package.json $out/lib/node_modules/opencode-worktree-plugin/package.json
             runHook postInstall
           '';
           doInstallCheck = true;
           installCheckPhase = ''
             runHook preInstallCheck
-            test -f $out/dist/index.js
-            test -f $out/dist/tui.js
-            test -f $out/package.json
+            test -f $out/lib/node_modules/opencode-worktree-plugin/dist/index.js
+            test -f $out/lib/node_modules/opencode-worktree-plugin/dist/tui.js
+            test -f $out/lib/node_modules/opencode-worktree-plugin/package.json
             runHook postInstallCheck
           '';
           meta = {
