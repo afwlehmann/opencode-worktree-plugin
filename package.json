@@ -1,6 +1,6 @@
 {
   "name": "opencode-worktree-plugin",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Git worktree management plugin for opencode — create, merge, and remove worktrees with dynamic permissions and TUI status bar",
   "type": "module",
   "license": "MIT",
