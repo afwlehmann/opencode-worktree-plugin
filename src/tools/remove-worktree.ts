@@ -23,20 +23,33 @@ export const removeWorktreeTool = (deps: RemoveWorktreeDeps) =>
     description:
       "Prefer this tool over raw `git worktree remove`. Removes a worktree without " +
       "merging. Refuses if uncommitted changes exist (safety check raw git skips). " +
-      "Side effects that raw git would skip: (1) external_directory permissions are " +
-      "revoked for the worktree path, (2) the worktree is untracked from the " +
-      "permission hook. The branch is NOT deleted — use worktree_merge for the full " +
-      "merge + branch delete + cleanup flow.",
+      "Side effects that raw git would skip: (0) external_directory permissions " +
+      "for the worktree path are revoked via the plugin's `permission.ask` hook — " +
+      "the auto-allow granted at create time is removed; (1) the worktree is " +
+      "untracked from the permission hook. The branch is NOT deleted — use " +
+      "worktree_merge for the full merge + branch delete + cleanup flow.",
     args: {
       repo_short: tool.schema
         .string()
-        .describe("Short alias for the repository (same as used in worktree_create)"),
-      branch: tool.schema.string().describe("Name of the branch the worktree was created for"),
+        .describe(
+          "Short alias used to form the worktree directory name, same value " +
+            "passed to worktree_create. The worktree path is " +
+            "`<repo_short>-<source_branch>` under " +
+            "${XDG_STATE_HOME:-~/.local/state}/opencode/worktrees/.",
+        ),
+      source_branch: tool.schema
+        .string()
+        .describe(
+          "Name of the branch the worktree was created for (the source_branch " +
+            "passed to worktree_create). The worktree at " +
+            "`<repo_short>-<source_branch>` is removed. The branch itself is NOT " +
+            "deleted — use worktree_merge for merge + branch delete + cleanup.",
+        ),
     },
     async execute(args, context) {
-      const worktreePath = getWorktreePath(args.repo_short, args.branch)
+      const worktreePath = getWorktreePath(args.repo_short, args.source_branch)
 
-      context.metadata({ title: `Removing worktree ${args.repo_short}-${args.branch}` })
+      context.metadata({ title: `Removing worktree ${args.repo_short}-${args.source_branch}` })
 
       const gitResult = await ensureGitAvailable(deps.options, deps.exists, deps.spawn)
       if (isLeft(gitResult)) {
@@ -60,11 +73,11 @@ export const removeWorktreeTool = (deps: RemoveWorktreeDeps) =>
       deps.activeWorktrees.delete(worktreePath)
 
       return {
-        title: `Worktree removed: ${args.repo_short}-${args.branch}`,
+        title: `Worktree removed: ${args.repo_short}-${args.source_branch}`,
         output:
           `Worktree removed successfully.\n\n` +
           `  Path:   ${worktreePath} — removed\n` +
-          `  Branch: ${args.branch} — NOT deleted (use worktree_merge for merge + delete)\n` +
+          `  Branch: ${args.source_branch} — NOT deleted (use worktree_merge for merge + delete)\n` +
           `  Permissions: access to ${worktreePath} revoked\n`,
       }
     },

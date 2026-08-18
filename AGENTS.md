@@ -18,7 +18,7 @@ All commands should be run via `nix develop -c` to use the pinned dev environmen
 
 Two entry points (SDK enforces `server?: never` / `tui?: never`):
 
-- **Server plugin** (`src/index.ts` → `dist/index.js`): three tools (`worktree_create`, `worktree_merge`, `worktree_remove`), `permission.ask` hook, `shell.env` hook
+- **Server plugin** (`src/index.ts` → `dist/index.js`): three tools (`worktree_create`, `worktree_merge`, `worktree_remove`), `permission.ask` hook, `shell.env` hook, `experimental.chat.system.transform` hook (injects the agent directive from `src/lib/directive.ts` into every session's system prompt)
 - **TUI plugin** (`src/tui.tsx` → `dist/tui.js`): `app_bottom` status bar slot
 
 ### Key modules
@@ -28,8 +28,9 @@ Two entry points (SDK enforces `server?: never` / `tui?: never`):
 - `src/lib/worktree.ts` — pure git operations (create, FF-only merge, remove, branch delete with `-d` only)
 - `src/lib/permissions.ts` — external_directory permission rule management
 - `src/lib/opencode-dir.ts` — gitignored `.opencode/` detection and copy
+- `src/lib/directive.ts` — system-prompt directive injected via `experimental.chat.system.transform`
 - `src/lib/title.ts` — session title formatting
-- `src/tools/` — tool definitions with Zod args
+- `src/tools/` — tool definitions with Zod args (all three tools share `repo_short` + `source_branch` arg names for consistency)
 - `src/types.ts` — `Either<E, T>`, `WorktreeError` union
 
 ## Conventions

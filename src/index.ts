@@ -6,6 +6,7 @@ import { mergeWorktreeTool } from "./tools/merge-worktree.js"
 import { removeWorktreeTool } from "./tools/remove-worktree.js"
 import { defaultSpawn, defaultExists, ensureGitAvailable, findGitOnPath } from "./lib/git-env.js"
 import { isActiveWorktreePath } from "./lib/permissions.js"
+import { WORKTREE_DIRECTIVE } from "./lib/directive.js"
 import * as fs from "node:fs/promises"
 
 const activeWorktrees = new Set<string>()
@@ -70,6 +71,10 @@ const serverPlugin: Plugin = async ({ client }, options) => {
         const nixPath = `${nixDir}:${output.env["PATH"] ?? process.env["PATH"] ?? ""}`
         output.env = { ...output.env, PATH: nixPath }
       }
+    },
+
+    "experimental.chat.system.transform": async (_input, output) => {
+      output.system = [...output.system, WORKTREE_DIRECTIVE]
     },
 
     event: async () => {},
