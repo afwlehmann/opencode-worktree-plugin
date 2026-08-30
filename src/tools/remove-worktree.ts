@@ -1,4 +1,5 @@
 import { tool } from "@opencode-ai/plugin/tool"
+import type { OpencodeClient } from "@opencode-ai/sdk"
 import type { ResolvedOptions } from "../types.js"
 import { getWorktreePath } from "../lib/paths.js"
 import {
@@ -9,6 +10,7 @@ import {
   resolveGitCommand,
 } from "../lib/git-env.js"
 import { removeWorktree as removeWt } from "../lib/worktree.js"
+import { createLogger } from "../lib/logger.js"
 import { toErrorMessage, type WorktreeError, isLeft } from "../types.js"
 
 export type RemoveWorktreeDeps = {
@@ -16,18 +18,19 @@ export type RemoveWorktreeDeps = {
   readonly exists: PathExistsFn
   readonly options: ResolvedOptions
   readonly activeWorktrees: Set<string>
+  readonly client: OpencodeClient
 }
 
 export const removeWorktreeTool = (deps: RemoveWorktreeDeps) =>
   tool({
     description:
-      "Prefer this tool over raw `git worktree remove`. Removes a worktree without " +
-      "merging. Refuses if uncommitted changes exist (safety check raw git skips). " +
-      "Side effects that raw git would skip: (0) external_directory permissions " +
-      "for the worktree path are revoked via the plugin's `permission.ask` hook — " +
-      "the auto-allow granted at create time is removed; (1) the worktree is " +
-      "untracked from the permission hook. The branch is NOT deleted — use " +
-      "worktree_merge for the full merge + branch delete + cleanup flow.",
+      "You MUST use this tool instead of raw `git worktree remove`. Removes a " +
+      "worktree without merging, then cleans up the worktree's external_directory " +
+      "permission tracking. Refuses if uncommitted changes exist (a safety check " +
+      "raw git skips). Do NOT run `git worktree remove` manually — this tool " +
+      "handles the permission tracking cleanup that raw git skips. The branch " +
+      "is NOT deleted — use worktree_merge for the full merge + branch delete + " +
+      "cleanup flow.",
     args: {
       repo_short: tool.schema
         .string()
@@ -48,17 +51,27 @@ export const removeWorktreeTool = (deps: RemoveWorktreeDeps) =>
     },
     async execute(args, context) {
       const worktreePath = getWorktreePath(args.repo_short, args.source_branch)
+      const log = createLogger(deps.client, "opencode-worktree-plugin")
 
       context.metadata({ title: `Removing worktree ${args.repo_short}-${args.source_branch}` })
+      await log.log(
+        "info",
+        `worktree_remove: repo_short=${args.repo_short} source_branch=${args.source_branch} worktree_path=${worktreePath}`,
+      )
 
       const gitResult = await ensureGitAvailable(deps.options, deps.exists, deps.spawn)
       if (isLeft(gitResult)) {
+        await log.log(
+          "error",
+          `worktree_remove: git not available: ${toErrorMessage(gitResult.failure)}`,
+        )
         return formatError(gitResult.failure)
       }
 
       const repoPath = context.directory
       const flakePresent = await hasFlakeNix(repoPath, deps.exists)
       const gitCmd = resolveGitCommand(deps.options, flakePresent)
+      await log.log("info", `worktree_remove: git command resolved: ${gitCmd.join(" ")}`)
 
       const removeResult = await removeWt(deps.spawn, {
         repoPath,
@@ -67,10 +80,22 @@ export const removeWorktreeTool = (deps: RemoveWorktreeDeps) =>
       })
 
       if (isLeft(removeResult)) {
+        await log.log(
+          "warn",
+          `worktree_remove: removal failed: ${toErrorMessage(removeResult.failure)}`,
+        )
         return formatError(removeResult.failure)
       }
 
+      await log.log("info", `worktree_remove: worktree removed at ${worktreePath}`)
+
       deps.activeWorktrees.delete(worktreePath)
+      await log.log(
+        "info",
+        `worktree_remove: external_directory permission tracking cleaned up for ${worktreePath} (active worktrees: ${deps.activeWorktrees.size})`,
+      )
+
+      await log.log("info", `worktree_remove: completed successfully`)
 
       return {
         title: `Worktree removed: ${args.repo_short}-${args.source_branch}`,
@@ -78,7 +103,7 @@ export const removeWorktreeTool = (deps: RemoveWorktreeDeps) =>
           `Worktree removed successfully.\n\n` +
           `  Path:   ${worktreePath} — removed\n` +
           `  Branch: ${args.source_branch} — NOT deleted (use worktree_merge for merge + delete)\n` +
-          `  Permissions: access to ${worktreePath} revoked\n`,
+          `  Permissions: tracking cleaned up\n`,
       }
     },
   })

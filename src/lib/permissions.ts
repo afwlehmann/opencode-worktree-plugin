@@ -52,3 +52,19 @@ export const removeWorktreePermission = (
 }
 
 export const normalizePath = (filePath: string): string => path.resolve(filePath)
+
+export const addWorktreeRootAllow = (
+  config: { permission?: Record<string, unknown> },
+  worktreeRoot: string,
+): void => {
+  const allowPattern = `${worktreeRoot}/**`
+  const permission = config.permission ?? (config.permission = {})
+  const extDir = permission["external_directory"]
+  if (typeof extDir === "string") {
+    permission["external_directory"] = { "*": extDir, [allowPattern]: "allow" }
+  } else if (extDir && typeof extDir === "object") {
+    ;(extDir as Record<string, string>)[allowPattern] = "allow"
+  } else {
+    permission["external_directory"] = { [allowPattern]: "allow" }
+  }
+}
