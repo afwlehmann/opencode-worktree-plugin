@@ -8,9 +8,14 @@ import { spawnSync } from "node:child_process"
 const PLUGIN_ROOT = process.cwd()
 const DIST_INDEX = path.join(PLUGIN_ROOT, "dist", "index.js")
 
+const REQUIRED_ENV = ["OPENAI_API_KEY", "OPENAI_MODEL", "OPENAI_URL"] as const
+
 const hasOpencode = (): boolean =>
   spawnSync("opencode", ["--version"], { stdio: "pipe" }).status === 0
-const canRun = hasOpencode() && existsSync(DIST_INDEX)
+const hasDist = (): boolean => existsSync(DIST_INDEX)
+const hasRequiredEnv = (): boolean => REQUIRED_ENV.every((key) => !!process.env[key])
+
+const canRun = hasOpencode() && hasDist() && hasRequiredEnv()
 
 const initGitRepo = (repoPath: string): void => {
   spawnSync("git", ["init"], { cwd: repoPath, stdio: "pipe" })
@@ -27,23 +32,59 @@ describe.skipIf(!canRun)("integration (opencode run)", () => {
   let tmpDir: string
   let repoPath: string
   let xdgStateHome: string
-  let originalXdgStateHome: string | undefined
+  let xdgConfigHome: string
+  let xdgDataHome: string
+  let originalEnv: Record<string, string | undefined>
 
   beforeAll(() => {
-    originalXdgStateHome = process.env["XDG_STATE_HOME"]
+    originalEnv = {
+      XDG_STATE_HOME: process.env["XDG_STATE_HOME"],
+      XDG_CONFIG_HOME: process.env["XDG_CONFIG_HOME"],
+      XDG_DATA_HOME: process.env["XDG_DATA_HOME"],
+      OPENCODE_CONFIG: process.env["OPENCODE_CONFIG"],
+      OPENCODE_CONFIG_CONTENT: process.env["OPENCODE_CONFIG_CONTENT"],
+      OPENCODE_TUI_CONFIG: process.env["OPENCODE_TUI_CONFIG"],
+    }
   })
 
   afterAll(() => {
-    if (originalXdgStateHome !== undefined) {
-      process.env["XDG_STATE_HOME"] = originalXdgStateHome
+    if (originalEnv["XDG_STATE_HOME"] !== undefined) {
+      process.env["XDG_STATE_HOME"] = originalEnv["XDG_STATE_HOME"]
     } else {
       delete process.env["XDG_STATE_HOME"]
+    }
+    if (originalEnv["XDG_CONFIG_HOME"] !== undefined) {
+      process.env["XDG_CONFIG_HOME"] = originalEnv["XDG_CONFIG_HOME"]
+    } else {
+      delete process.env["XDG_CONFIG_HOME"]
+    }
+    if (originalEnv["XDG_DATA_HOME"] !== undefined) {
+      process.env["XDG_DATA_HOME"] = originalEnv["XDG_DATA_HOME"]
+    } else {
+      delete process.env["XDG_DATA_HOME"]
+    }
+    if (originalEnv["OPENCODE_CONFIG"] !== undefined) {
+      process.env["OPENCODE_CONFIG"] = originalEnv["OPENCODE_CONFIG"]
+    } else {
+      delete process.env["OPENCODE_CONFIG"]
+    }
+    if (originalEnv["OPENCODE_CONFIG_CONTENT"] !== undefined) {
+      process.env["OPENCODE_CONFIG_CONTENT"] = originalEnv["OPENCODE_CONFIG_CONTENT"]
+    } else {
+      delete process.env["OPENCODE_CONFIG_CONTENT"]
+    }
+    if (originalEnv["OPENCODE_TUI_CONFIG"] !== undefined) {
+      process.env["OPENCODE_TUI_CONFIG"] = originalEnv["OPENCODE_TUI_CONFIG"]
+    } else {
+      delete process.env["OPENCODE_TUI_CONFIG"]
     }
   })
 
   beforeEach(async () => {
     tmpDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "wt-int-")))
     xdgStateHome = path.join(tmpDir, "state")
+    xdgConfigHome = path.join(tmpDir, "config")
+    xdgDataHome = path.join(tmpDir, "data")
     repoPath = path.join(tmpDir, "repo")
     await fs.mkdir(repoPath, { recursive: true })
     await fs.writeFile(path.join(repoPath, "README.md"), "hello\n")
@@ -53,6 +94,27 @@ describe.skipIf(!canRun)("integration (opencode run)", () => {
       JSON.stringify({
         $schema: "https://opencode.ai/config.json",
         plugin: [`file://${PLUGIN_ROOT}`],
+        default_agent: "build",
+        permission: {
+          "*": "allow",
+          bash: { "*": "allow" },
+          edit: { "*": "allow" },
+          external_directory: { "/**": "deny" },
+        },
+        provider: {
+          "openai-compatible": {
+            name: "Integration Test",
+            npm: "@ai-sdk/openai-compatible",
+            options: {
+              apiKey: "{env:OPENAI_API_KEY}",
+              baseURL: "{env:OPENAI_URL}",
+            },
+            models: {
+              model: { id: "{env:OPENAI_MODEL}" },
+            },
+          },
+        },
+        model: "openai-compatible/model",
       }),
     )
   })
@@ -63,14 +125,26 @@ describe.skipIf(!canRun)("integration (opencode run)", () => {
   })
 
   const runOpencode = (prompt: string, timeoutMs = 120000) => {
+    const env: NodeJS.ProcessEnv = { ...process.env }
+    delete env["XDG_STATE_HOME"]
+    delete env["XDG_CONFIG_HOME"]
+    delete env["XDG_DATA_HOME"]
+    delete env["OPENCODE_CONFIG"]
+    delete env["OPENCODE_CONFIG_CONTENT"]
+    delete env["OPENCODE_TUI_CONFIG"]
+    env["XDG_STATE_HOME"] = xdgStateHome
+    env["XDG_CONFIG_HOME"] = xdgConfigHome
+    env["XDG_DATA_HOME"] = xdgDataHome
+    env["OPENCODE_DISABLE_AUTOUPDATE"] = "1"
+
     const result = spawnSync(
       "opencode",
-      ["run", "--auto", "--print-logs", "--log-level", "INFO", "--agent", "build", prompt],
+      ["run", "--auto", "--print-logs", "--log-level", "INFO", prompt],
       {
         cwd: repoPath,
         encoding: "utf-8",
         timeout: timeoutMs,
-        env: { ...process.env, XDG_STATE_HOME: xdgStateHome },
+        env,
       },
     )
     return {
@@ -151,5 +225,18 @@ describe.skipIf(!canRun)("integration (opencode run)", () => {
 
     expect(existsSync(wtPath("integ", "feat-dirty"))).toBe(true)
     expect(git(repoPath, "rev-parse", "--verify", "feat-dirty").status).toBe(0)
+  })
+})
+
+describe.skipIf(canRun)("integration (opencode run) — skipped", () => {
+  it("explains why integration tests are skipped", () => {
+    const missing: string[] = []
+    if (!hasOpencode()) missing.push("opencode binary on PATH")
+    if (!hasDist()) missing.push("dist/index.js (run npm run build)")
+    for (const key of REQUIRED_ENV) {
+      if (!process.env[key]) missing.push(`${key} env var`)
+    }
+    expect(missing).toEqual(missing)
+    console.log(`Integration tests skipped. Missing: ${missing.join(", ")}`)
   })
 })
