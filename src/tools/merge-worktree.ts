@@ -25,11 +25,15 @@ export type MergeWorktreeDeps = {
 export const mergeWorktreeTool = (deps: MergeWorktreeDeps) =>
   tool({
     description:
-      "Merge a worktree's branch into the target branch using fast-forward merge only. " +
-      "On success: the worktree is removed and the source branch is deleted (never force-delete). " +
-      "If the merge cannot fast-forward, the tool returns an error — the agent must rebase " +
-      "the worktree branch onto the target branch first, then retry. " +
-      "Dynamic permissions are updated to deny access to the removed worktree.",
+      "Prefer this tool over raw `git merge` + `git worktree remove`. Merges a " +
+      "worktree's branch into the target branch using fast-forward merge only. On " +
+      "success: the worktree is removed and the source branch is deleted (`-d` only, " +
+      "never force-delete). Side effects that raw git would skip: (1) external_directory " +
+      "permissions are revoked for the removed worktree path, (2) the worktree is " +
+      "untracked from the permission hook, (3) branch deletion is `-d`-only (refuses " +
+      "if not fully merged). If the merge cannot fast-forward, rebase the worktree " +
+      "branch onto the target first, then retry. Workflow: call worktree_create first, " +
+      "then this to fold changes back.",
     args: {
       repo_short: tool.schema
         .string()

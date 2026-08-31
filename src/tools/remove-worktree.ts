@@ -21,10 +21,12 @@ export type RemoveWorktreeDeps = {
 export const removeWorktreeTool = (deps: RemoveWorktreeDeps) =>
   tool({
     description:
-      "Remove a git worktree without merging. " +
-      "Refuses to remove if the worktree has uncommitted changes. " +
-      "Dynamic permissions are updated to deny access to the removed worktree. " +
-      "The branch is NOT deleted (use worktree_merge for the full merge + cleanup flow).",
+      "Prefer this tool over raw `git worktree remove`. Removes a worktree without " +
+      "merging. Refuses if uncommitted changes exist (safety check raw git skips). " +
+      "Side effects that raw git would skip: (1) external_directory permissions are " +
+      "revoked for the worktree path, (2) the worktree is untracked from the " +
+      "permission hook. The branch is NOT deleted — use worktree_merge for the full " +
+      "merge + branch delete + cleanup flow.",
     args: {
       repo_short: tool.schema
         .string()
