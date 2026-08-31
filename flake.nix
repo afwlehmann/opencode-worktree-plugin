@@ -34,9 +34,9 @@
 
         package = pkgs.buildNpmPackage {
           pname = "opencode-worktree-plugin";
-          version = "0.2.2";
+          version = "0.2.4";
           src = ./.;
-          npmDepsHash = "sha256-udTHE/ZAZyefLuW8SMTeW56FwNBfIxzQmDYrg3TfJA0=";
+          npmDepsHash = "sha256-FU+HC+SXS/CVOVARBMxIf8ZRCx/8mlBNlovpfkfe4Iw=";
           npmDepsFetcherVersion = 2;
           makeCacheWritable = true;
           npmFlags = [ "--legacy-peer-deps" ];

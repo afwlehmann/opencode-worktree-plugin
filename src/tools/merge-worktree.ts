@@ -28,21 +28,38 @@ export const mergeWorktreeTool = (deps: MergeWorktreeDeps) =>
       "Prefer this tool over raw `git merge` + `git worktree remove`. Merges a " +
       "worktree's branch into the target branch using fast-forward merge only. On " +
       "success: the worktree is removed and the source branch is deleted (`-d` only, " +
-      "never force-delete). Side effects that raw git would skip: (1) external_directory " +
-      "permissions are revoked for the removed worktree path, (2) the worktree is " +
-      "untracked from the permission hook, (3) branch deletion is `-d`-only (refuses " +
-      "if not fully merged). If the merge cannot fast-forward, rebase the worktree " +
-      "branch onto the target first, then retry. Workflow: call worktree_create first, " +
-      "then this to fold changes back.",
+      "never force-delete). Side effects that raw git would skip: (0) external_directory " +
+      "permissions for the worktree path are revoked via the plugin's " +
+      "`permission.ask` hook — the auto-allow granted at create time is removed; " +
+      "(1) the worktree is untracked from the permission hook, (2) branch deletion is " +
+      "`-d`-only (refuses if not fully merged). If the merge cannot fast-forward, " +
+      "rebase the worktree branch onto the target first, then retry. Workflow: call " +
+      "worktree_create first, then this to fold changes back.",
     args: {
       repo_short: tool.schema
         .string()
-        .describe("Short alias for the repository (same as used in worktree_create)"),
-      source_branch: tool.schema.string().describe("Name of the worktree branch to merge"),
+        .describe(
+          "Short alias used to form the worktree directory name, same value " +
+            "passed to worktree_create. The worktree path is " +
+            "`<repo_short>-<source_branch>` under " +
+            "${XDG_STATE_HOME:-~/.local/state}/opencode/worktrees/.",
+        ),
+      source_branch: tool.schema
+        .string()
+        .describe(
+          "Name of the worktree branch to merge. MUST match the " +
+            "source_branch used at worktree_create time. The worktree at " +
+            "`<repo_short>-<source_branch>` is removed after a successful merge, " +
+            "and this branch is deleted with `git branch -d` (never `-D`).",
+        ),
       target_branch: tool.schema
         .string()
         .optional()
-        .describe("Target branch to merge into (default: main)"),
+        .describe(
+          "Target branch to merge into (default: main). The source_branch " +
+            "is fast-forward-merged into this branch. If a fast-forward is not " +
+            "possible, rebase the source_branch onto this target first, then retry.",
+        ),
     },
     async execute(args, context) {
       const targetBranch = args.target_branch ?? "main"
