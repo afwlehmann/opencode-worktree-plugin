@@ -1,3 +1,5 @@
+import { Result } from "effect"
+
 export type PluginOptions = {
   readonly preferNixDevelop?: boolean
 }
@@ -47,34 +49,34 @@ export type WorktreeError =
       readonly message: string
     }
 
-export type Either<E, T> =
-  { readonly _tag: "Left"; readonly error: E } | { readonly _tag: "Right"; readonly value: T }
+export type Either<E, T> = Result.Result<T, E>
 
-export const left = <E>(error: E): Either<E, never> => ({ _tag: "Left", error })
+export const left: <E>(error: E) => Either<E, never> = Result.fail
 
-export const right = <T>(value: T): Either<never, T> => ({ _tag: "Right", value })
+export const right: <T>(value: T) => Either<never, T> = Result.succeed
 
-export const isLeft = <E, T>(either: Either<E, T>): either is { _tag: "Left"; error: E } =>
-  either._tag === "Left"
+export function isLeft<E, T>(either: Either<E, T>): either is Result.Failure<T, E>
+export function isLeft<E, T>(either: Either<E, T>): either is Result.Failure<T, E> {
+  return Result.isFailure(either)
+}
 
-export const isRight = <E, T>(either: Either<E, T>): either is { _tag: "Right"; value: T } =>
-  either._tag === "Right"
+export function isRight<E, T>(either: Either<E, T>): either is Result.Success<T, E>
+export function isRight<E, T>(either: Either<E, T>): either is Result.Success<T, E> {
+  return Result.isSuccess(either)
+}
 
 export const map = <E, T, U>(either: Either<E, T>, fn: (value: T) => U): Either<E, U> =>
-  either._tag === "Right" ? right(fn(either.value)) : (either as Either<E, U>)
+  Result.map(either, fn)
 
 export const flatMap = <E, T, U>(
   either: Either<E, T>,
   fn: (value: T) => Either<E, U>,
-): Either<E, U> => (either._tag === "Right" ? fn(either.value) : (either as Either<E, U>))
+): Either<E, U> => Result.flatMap(either, fn)
 
 export const mapError = <E, F, T>(either: Either<E, T>, fn: (error: E) => F): Either<F, T> =>
-  either._tag === "Left" ? left(fn(either.error)) : (either as Either<F, T>)
+  Result.mapError(either, fn)
 
-export const getOrThrow = <E, T>(either: Either<E, T>): T => {
-  if (either._tag === "Left") throw either.error
-  return either.value
-}
+export const getOrThrow: <E, T>(either: Either<E, T>) => T = Result.getOrThrow
 
 export const toErrorMessage = (error: WorktreeError): string => {
   switch (error.kind) {

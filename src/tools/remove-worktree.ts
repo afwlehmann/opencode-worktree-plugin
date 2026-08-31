@@ -43,7 +43,7 @@ export const removeWorktreeTool = (deps: RemoveWorktreeDeps) =>
 
       const gitResult = await ensureGitAvailable(deps.options, deps.exists, deps.spawn)
       if (isLeft(gitResult)) {
-        return formatError(gitResult.error)
+        return formatError(gitResult.failure)
       }
 
       const repoPath = context.directory
@@ -57,7 +57,7 @@ export const removeWorktreeTool = (deps: RemoveWorktreeDeps) =>
       })
 
       if (isLeft(removeResult)) {
-        return formatError(removeResult.error)
+        return formatError(removeResult.failure)
       }
 
       deps.activeWorktrees.delete(worktreePath)

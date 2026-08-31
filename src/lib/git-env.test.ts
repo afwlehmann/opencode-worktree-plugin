@@ -63,7 +63,7 @@ describe("git-env", () => {
       const result = await (
         await import("./git-env.js")
       ).ensureGitAvailable({ preferNixDevelop: false }, exists, spawn)
-      expect(result._tag).toBe("Right")
+      expect(result._tag).toBe("Success")
     })
 
     it("returns left with git-not-found when git not on path and spawn fails", async () => {
@@ -74,7 +74,7 @@ describe("git-env", () => {
       const result = await (
         await import("./git-env.js")
       ).ensureGitAvailable({ preferNixDevelop: false }, exists, spawn)
-      expect(result._tag).toBe("Left")
+      expect(result._tag).toBe("Failure")
     })
   })
 })

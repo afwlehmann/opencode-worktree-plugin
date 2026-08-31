@@ -58,7 +58,7 @@ export const mergeWorktreeTool = (deps: MergeWorktreeDeps) =>
 
       const gitResult = await ensureGitAvailable(deps.options, deps.exists, deps.spawn)
       if (isLeft(gitResult)) {
-        return formatError(gitResult.error)
+        return formatError(gitResult.failure)
       }
 
       const repoPath = context.directory
@@ -74,11 +74,11 @@ export const mergeWorktreeTool = (deps: MergeWorktreeDeps) =>
       })
 
       if (isLeft(mergeResult)) {
-        if (mergeResult.error.kind === "not-fast-forward") {
+        if (mergeResult.failure.kind === "not-fast-forward") {
           return {
             title: "Merge failed — not fast-forward",
             output:
-              toErrorMessage(mergeResult.error) +
+              toErrorMessage(mergeResult.failure) +
               "\n\nTo fix this:\n" +
               `  1. cd ${worktreePath}\n` +
               `  2. ${gitCmd.join(" ")} rebase ${targetBranch}\n` +
@@ -88,7 +88,7 @@ export const mergeWorktreeTool = (deps: MergeWorktreeDeps) =>
               `  ${gitCmd.join(" ")} rebase ${targetBranch} ${args.source_branch}`,
           }
         }
-        return formatError(mergeResult.error)
+        return formatError(mergeResult.failure)
       }
 
       const mergeMode = getOrThrow(mergeResult)
@@ -104,7 +104,7 @@ export const mergeWorktreeTool = (deps: MergeWorktreeDeps) =>
           title: "Merged but worktree removal failed",
           output:
             `Branch ${args.source_branch} was merged into ${targetBranch} successfully, ` +
-            `but the worktree could not be removed:\n\n${toErrorMessage(removeResult.error)}\n\n` +
+            `but the worktree could not be removed:\n\n${toErrorMessage(removeResult.failure)}\n\n` +
             `The merge is complete. You may need to manually run:\n` +
             `  ${gitCmd.join(" ")} worktree remove --force ${worktreePath}`,
         }
@@ -122,7 +122,7 @@ export const mergeWorktreeTool = (deps: MergeWorktreeDeps) =>
           title: "Merged and worktree removed, branch deletion failed",
           output:
             `Worktree merged and removed successfully, but branch deletion failed:\n\n` +
-            toErrorMessage(deleteResult.error) +
+            toErrorMessage(deleteResult.failure) +
             `\n\nYou may manually run: ${gitCmd.join(" ")} branch -d ${args.source_branch}`,
         }
       }

@@ -1,5 +1,5 @@
 import type { Either, WorktreeError, WorktreeInfo } from "../types.js"
-import { left, right } from "../types.js"
+import { isLeft, left, right } from "../types.js"
 import type { GitCommand, SpawnFn, SpawnResult } from "./git-env.js"
 import { runGit, runGitOrError } from "./git-env.js"
 
@@ -55,6 +55,39 @@ const hasUncommittedChanges = async (
   return result.exitCode === 0 && result.stdout.trim().length > 0
 }
 
+export const createWorktree = async (
+  spawn: SpawnFn,
+  input: CreateWorktreeInput,
+): Promise<Either<WorktreeError, WorktreeInfo>> => {
+  const { repoPath, worktreePath, sourceBranch, targetBranch, gitCmd } = input
+
+  if (await branchExists(gitCmd, spawn, repoPath, sourceBranch)) {
+    return left({ kind: "branch-exists", branch: sourceBranch })
+  }
+
+  const result = await runGitOrError(
+    gitCmd,
+    spawn,
+    ["worktree", "add", "-b", sourceBranch, worktreePath, targetBranch],
+    repoPath,
+  )
+
+  if (isLeft(result)) {
+    if (result.failure.kind === "git-error" && result.failure.stderr.includes("already exists")) {
+      return left({ kind: "worktree-exists", path: worktreePath })
+    }
+    return left(result.failure)
+  }
+
+  return right({
+    repoShort: "",
+    sourceBranch,
+    targetBranch,
+    path: worktreePath,
+    repoPath,
+  })
+}
+
 const isBranchAncestor = async (
   gitCmd: GitCommand,
   spawn: SpawnFn,
@@ -78,39 +111,6 @@ const currentBranch = async (
 ): Promise<string> => {
   const result = await runGit(gitCmd, spawn, ["rev-parse", "--abbrev-ref", "HEAD"], repoPath)
   return result.exitCode === 0 ? result.stdout.trim() : ""
-}
-
-export const createWorktree = async (
-  spawn: SpawnFn,
-  input: CreateWorktreeInput,
-): Promise<Either<WorktreeError, WorktreeInfo>> => {
-  const { repoPath, worktreePath, sourceBranch, targetBranch, gitCmd } = input
-
-  if (await branchExists(gitCmd, spawn, repoPath, sourceBranch)) {
-    return left({ kind: "branch-exists", branch: sourceBranch })
-  }
-
-  const result = await runGitOrError(
-    gitCmd,
-    spawn,
-    ["worktree", "add", "-b", sourceBranch, worktreePath, targetBranch],
-    repoPath,
-  )
-
-  if (result._tag === "Left") {
-    if (result.error.kind === "git-error" && result.error.stderr.includes("already exists")) {
-      return left({ kind: "worktree-exists", path: worktreePath })
-    }
-    return result
-  }
-
-  return right({
-    repoShort: "",
-    sourceBranch,
-    targetBranch,
-    path: worktreePath,
-    repoPath,
-  })
 }
 
 export type MergeMode = "working-copy" | "ref-only"
@@ -165,7 +165,7 @@ export const removeWorktree = async (
   }
 
   const result = await runGitOrError(gitCmd, spawn, ["worktree", "remove", worktreePath], repoPath)
-  if (result._tag === "Left") return result
+  if (isLeft(result)) return left(result.failure)
 
   return right(undefined)
 }
@@ -196,9 +196,8 @@ export const deleteBranch = async (
       command: `git branch -d ${branch}`,
       stderr: result.stderr.trim() || fallback.stderr.trim(),
       message:
-        result.stderr.trim() ||
-        fallback.stderr.trim() ||
-        `git branch -d exited with code ${result.exitCode}`,
+        (result.stderr.trim() || fallback.stderr.trim() ||
+          `git branch -d exited with code ${result.exitCode}`),
     })
   }
 
@@ -211,9 +210,9 @@ export const listWorktrees = async (
   repoPath: string,
 ): Promise<Either<WorktreeError, readonly string[]>> => {
   const result = await runGitOrError(gitCmd, spawn, ["worktree", "list", "--porcelain"], repoPath)
-  if (result._tag === "Left") return result
+  if (isLeft(result)) return left(result.failure)
 
-  const paths = result.value
+  const paths = result.success
     .split("\n")
     .filter((line) => line.startsWith("worktree "))
     .map((line) => line.slice("worktree ".length))

@@ -1,6 +1,6 @@
 import type { Plugin } from "@opencode-ai/plugin"
 import type { PluginOptions } from "./types.js"
-import { resolveOptions } from "./types.js"
+import { resolveOptions, isLeft } from "./types.js"
 import { createWorktreeTool } from "./tools/create-worktree.js"
 import { mergeWorktreeTool } from "./tools/merge-worktree.js"
 import { removeWorktreeTool } from "./tools/remove-worktree.js"
@@ -14,14 +14,14 @@ const serverPlugin: Plugin = async ({ client }, options) => {
   const opts = resolveOptions(options as PluginOptions | undefined)
 
   const gitCheck = await ensureGitAvailable(opts, defaultExists, defaultSpawn)
-  if (gitCheck._tag === "Left") {
+  if (isLeft(gitCheck)) {
     await client.app.log({
       body: {
         service: "opencode-worktree-plugin",
         level: "error",
         message: `git not found: ${
-          gitCheck.error.kind === "git-not-found"
-            ? gitCheck.error.searchedPaths.join(", ")
+          gitCheck.failure.kind === "git-not-found"
+            ? gitCheck.failure.searchedPaths.join(", ")
             : "unknown error"
         }`,
         extra: {},

@@ -78,7 +78,7 @@ export const createWorktreeTool = (deps: CreateWorktreeDeps) =>
 
       const gitResult = await ensureGitAvailable(deps.options, deps.exists, deps.spawn)
       if (isLeft(gitResult)) {
-        return formatError(gitResult.error)
+        return formatError(gitResult.failure)
       }
 
       const repoPath = context.directory
@@ -95,7 +95,7 @@ export const createWorktreeTool = (deps: CreateWorktreeDeps) =>
       })
 
       if (isLeft(createResult)) {
-        return formatError(createResult.error)
+        return formatError(createResult.failure)
       }
 
       const opencodeStatus = await detectOpencodeDir(deps.spawn, resolvedGitCmd, repoPath)
@@ -114,7 +114,7 @@ export const createWorktreeTool = (deps: CreateWorktreeDeps) =>
 
           const copyResult = await copyOpencodeDir(repoPath, worktreePath)
           if (isLeft(copyResult)) {
-            return formatError(copyResult.error)
+            return formatError(copyResult.failure)
           }
         } catch {
           return {
@@ -130,7 +130,7 @@ export const createWorktreeTool = (deps: CreateWorktreeDeps) =>
       deps.activeWorktrees.add(worktreePath)
 
       const listResult = await listWorktrees(deps.spawn, resolvedGitCmd, repoPath)
-      const worktreeCount = isRight(listResult) ? listResult.value.length : "unknown"
+      const worktreeCount = isRight(listResult) ? listResult.success.length : "unknown"
 
       return {
         title: `Worktree created: ${args.repo_short}-${args.source_branch}`,
