@@ -196,8 +196,9 @@ export const deleteBranch = async (
       command: `git branch -d ${branch}`,
       stderr: result.stderr.trim() || fallback.stderr.trim(),
       message:
-        (result.stderr.trim() || fallback.stderr.trim() ||
-          `git branch -d exited with code ${result.exitCode}`),
+        result.stderr.trim() ||
+        fallback.stderr.trim() ||
+        `git branch -d exited with code ${result.exitCode}`,
     })
   }
 

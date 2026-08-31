@@ -4,15 +4,18 @@
 
 All commands should be run via `nix develop -c` to use the pinned dev environment.
 
-| Task      | Command                            |
-| --------- | ---------------------------------- |
-| Install   | `nix develop -c npm ci`            |
-| Build     | `nix develop -c npm run build`     |
-| Test      | `nix develop -c npm test`          |
-| Typecheck | `nix develop -c npm run typecheck` |
-| Lint      | `nix develop -c npm run lint`      |
-| Format    | `nix develop -c npm run format`    |
-| Dev shell | `nix develop`                      |
+| Task       | Command                            |
+| ---------- | ---------------------------------- |
+| Install    | `nix develop -c npm ci`            |
+| Build      | `nix develop -c npm run build`     |
+| Test       | `nix develop -c npm test`          |
+| Unit tests | `nix develop -c npm run test:unit` |
+| Typecheck  | `nix develop -c npm run typecheck` |
+| Lint       | `nix develop -c npm run lint`      |
+| Format     | `nix develop -c npm run format`    |
+| Lockfile   | `npm install --package-lock-only`  |
+| Nix build  | `nix build .#default`              |
+| Dev shell  | `nix develop`                      |
 
 ## Architecture
 
@@ -44,6 +47,7 @@ Two entry points (SDK enforces `server?: never` / `tui?: never`):
 - **Logging**: tools log all interesting operations at info level via `createLogger` (`src/lib/logger.ts`), warnings for recoverable failures, errors for git-unavailable. Operations are infrequent so info-level logging won't spam.
 - **Permission lifecycle**: `config` hook statically allows `${worktreeRoot}/**` at init. `worktree_create` adds the worktree path to `activeWorktrees`. `worktree_merge`/`worktree_remove` remove it from `activeWorktrees` after worktree removal but before branch deletion.
 - **`preferNixDevelop` option**: when `true` and `flake.nix` is present, git runs via `nix develop -c git`.
+- **npmDepsHash**: must match `package-lock.json`. Whenever the lockfile changes (dependency updates, version bumps — run `npm install --package-lock-only` to sync the version), recompute it: run `nix build .#default`, copy the `got:` sha256 from the hash-mismatch error into `flake.nix`, rebuild to confirm. CI builds the nix package, so a stale hash fails CI. The package `version` is read from `package.json` via `lib.importJSON` — never hardcode it in `flake.nix`.
 - **Tests**: co-located `*.test.ts` files, run with `nix develop -c npm test`.
 
 ## TUI typecheck note

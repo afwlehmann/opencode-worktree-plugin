@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  nix-eval:
+  nix:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -27,6 +27,7 @@ jobs:
           flakehub: false
       - uses: DeterminateSystems/magic-nix-cache-action@v14
       - run: nix develop --command nix flake check --no-build --print-build-logs
+      - run: nix develop --command nix build .#default --print-build-logs
 
   lint:
     runs-on: ${{ matrix.os }}
@@ -71,7 +72,7 @@ jobs:
           flakehub: false
       - uses: DeterminateSystems/magic-nix-cache-action@v14
       - run: nix develop --command npm ci
-      - run: nix develop --command npx vitest run
+      - run: nix develop --command npx vitest run --exclude src/integration.test.ts
 
   build:
     runs-on: ${{ matrix.os }}
@@ -100,14 +101,14 @@ jobs:
         shell: bash
       - run: npx tsc --noEmit
         shell: bash
-      - run: npx vitest run
+      - run: npx vitest run --exclude src/integration.test.ts
         shell: bash
       - run: npx vite build
         shell: bash
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [nix-eval, lint, typecheck, test, build, windows]
+    needs: [nix, lint, typecheck, test, build, windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

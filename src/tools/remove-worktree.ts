@@ -60,7 +60,11 @@ export const removeWorktreeTool = (deps: RemoveWorktreeDeps) =>
         return formatError({ kind: "invalid-name", name })
       }
 
-      const worktreePath = await resolveWorktreePath(deps.exists, args.repo_short, args.source_branch)
+      const worktreePath = await resolveWorktreePath(
+        deps.exists,
+        args.repo_short,
+        args.source_branch,
+      )
 
       context.metadata({ title: `Removing worktree ${args.repo_short}-${args.source_branch}` })
       await log.log(

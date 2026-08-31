@@ -79,7 +79,11 @@ export const mergeWorktreeTool = (deps: MergeWorktreeDeps) =>
         return formatError({ kind: "invalid-name", name })
       }
 
-      const worktreePath = await resolveWorktreePath(deps.exists, args.repo_short, args.source_branch)
+      const worktreePath = await resolveWorktreePath(
+        deps.exists,
+        args.repo_short,
+        args.source_branch,
+      )
 
       context.metadata({ title: `Merging ${args.source_branch} into ${targetBranch}` })
       await log.log(

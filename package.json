@@ -26,6 +26,7 @@
   "scripts": {
     "build": "vite build",
     "test": "vitest run",
+    "test:unit": "vitest run --exclude src/integration.test.ts",
     "test:watch": "vitest",
     "lint": "eslint .",
     "format": "prettier --write .",
