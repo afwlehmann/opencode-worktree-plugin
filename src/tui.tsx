@@ -95,6 +95,7 @@ const tuiPlugin: TuiPlugin = async (api, options) => {
 }
 
 const tuiModule: TuiPluginModule = {
+  id: "opencode-worktree-plugin",
   tui: tuiPlugin,
 }
 

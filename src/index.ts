@@ -1,4 +1,4 @@
-import type { Plugin } from "@opencode-ai/plugin"
+import type { Plugin, PluginModule } from "@opencode-ai/plugin"
 import type { PluginOptions } from "./types.js"
 import { resolveOptions, isLeft } from "./types.js"
 import { createWorktreeTool } from "./tools/create-worktree.js"
@@ -76,4 +76,9 @@ const serverPlugin: Plugin = async ({ client }, options) => {
   }
 }
 
-export default serverPlugin
+const serverModule: PluginModule = {
+  id: "opencode-worktree-plugin",
+  server: serverPlugin,
+}
+
+export default serverModule
