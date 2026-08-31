@@ -5,6 +5,7 @@ import {
   isActiveWorktreePath,
   addWorktreePermission,
   removeWorktreePermission,
+  addWorktreeRootAllow,
 } from "./permissions.js"
 
 describe("permissions", () => {
@@ -75,6 +76,46 @@ describe("permissions", () => {
     it("works with undefined current rules", () => {
       const result = removeWorktreePermission(undefined, "/state/ocp-feature")
       expect(Object.keys(result)).toEqual([])
+    })
+  })
+
+  describe("addWorktreeRootAllow", () => {
+    it("adds allow rule for worktree root when no external_directory exists", () => {
+      const config: { permission?: Record<string, unknown> } = {}
+      addWorktreeRootAllow(config, ["/state/opencode/worktrees"])
+      const extDir = config.permission?.["external_directory"] as Record<string, string>
+      expect(extDir["/state/opencode/worktrees/**"]).toBe("allow")
+    })
+
+    it("adds allow rule when external_directory is a flat string action", () => {
+      const config: { permission?: Record<string, unknown> } = {
+        permission: { external_directory: "deny" },
+      }
+      addWorktreeRootAllow(config, ["/state/opencode/worktrees"])
+      const extDir = config.permission?.["external_directory"] as Record<string, string>
+      expect(extDir["*"]).toBe("deny")
+      expect(extDir["/state/opencode/worktrees/**"]).toBe("allow")
+    })
+
+    it("adds allow rule to existing object external_directory preserving prior rules", () => {
+      const config: { permission?: Record<string, unknown> } = {
+        permission: { external_directory: { "/**": "deny", "/other/**": "allow" } },
+      }
+      addWorktreeRootAllow(config, ["/state/opencode/worktrees"])
+      const extDir = config.permission?.["external_directory"] as Record<string, string>
+      expect(extDir["/**"]).toBe("deny")
+      expect(extDir["/other/**"]).toBe("allow")
+      expect(extDir["/state/opencode/worktrees/**"]).toBe("allow")
+    })
+
+    it("adds allow rules for both unresolved and resolved roots", () => {
+      const config: { permission?: Record<string, unknown> } = {
+        permission: { external_directory: { "/**": "deny" } },
+      }
+      addWorktreeRootAllow(config, ["/tmp/state/opencode/worktrees", "/private/tmp/state/opencode/worktrees"])
+      const extDir = config.permission?.["external_directory"] as Record<string, string>
+      expect(extDir["/tmp/state/opencode/worktrees/**"]).toBe("allow")
+      expect(extDir["/private/tmp/state/opencode/worktrees/**"]).toBe("allow")
     })
   })
 })

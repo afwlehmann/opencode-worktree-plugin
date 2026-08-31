@@ -5,7 +5,8 @@ import { createWorktreeTool } from "./tools/create-worktree.js"
 import { mergeWorktreeTool } from "./tools/merge-worktree.js"
 import { removeWorktreeTool } from "./tools/remove-worktree.js"
 import { defaultSpawn, defaultExists, ensureGitAvailable, findGitOnPath } from "./lib/git-env.js"
-import { isActiveWorktreePath } from "./lib/permissions.js"
+import { isActiveWorktreePath, addWorktreeRootAllow } from "./lib/permissions.js"
+import { getWorktreeRoot, resolveWorktreeRoot } from "./lib/paths.js"
 import { WORKTREE_DIRECTIVE } from "./lib/directive.js"
 import * as fs from "node:fs/promises"
 
@@ -40,19 +41,29 @@ const serverPlugin: Plugin = async ({ client }, options) => {
         },
         options: opts,
         activeWorktrees,
+        client,
       }),
       worktree_merge: mergeWorktreeTool({
         spawn: defaultSpawn,
         exists: defaultExists,
         options: opts,
         activeWorktrees,
+        client,
       }),
       worktree_remove: removeWorktreeTool({
         spawn: defaultSpawn,
         exists: defaultExists,
         options: opts,
         activeWorktrees,
+        client,
       }),
+    },
+
+    config: async (config) => {
+      const unresolved = getWorktreeRoot()
+      const resolved = await resolveWorktreeRoot(defaultExists)
+      const roots = unresolved === resolved ? [unresolved] : [unresolved, resolved]
+      addWorktreeRootAllow(config, roots)
     },
 
     "permission.ask": async (input, output) => {

@@ -1,4 +1,5 @@
 import { tool } from "@opencode-ai/plugin/tool"
+import type { OpencodeClient } from "@opencode-ai/sdk"
 import type { ResolvedOptions } from "../types.js"
 import { isValidWorktreeName, resolveWorktreePath, ensureWorktreeRoot } from "../lib/paths.js"
 import {
@@ -11,6 +12,7 @@ import {
 } from "../lib/git-env.js"
 import { createWorktree as createWt, listWorktrees } from "../lib/worktree.js"
 import { detectOpencodeDir, shouldPromptForCopy, copyOpencodeDir } from "../lib/opencode-dir.js"
+import { createLogger } from "../lib/logger.js"
 import { toErrorMessage, type WorktreeError, isLeft, isRight } from "../types.js"
 
 export type ToolContext = {
@@ -35,21 +37,24 @@ export type CreateWorktreeDeps = {
   readonly mkdir: (path: string, opts: { recursive: boolean }) => Promise<void>
   readonly options: ResolvedOptions
   readonly activeWorktrees: Set<string>
+  readonly client: OpencodeClient
 }
 
 export const createWorktreeTool = (deps: CreateWorktreeDeps) =>
   tool({
     description:
-      "Prefer this tool over raw `git worktree add`. Create a git worktree for a " +
-      "repository, created under ${XDG_STATE_HOME}/opencode/worktrees/<repo_short>-<source_branch>. " +
-      "Creates a new branch from the target branch (default: main). Side effects " +
-      "that raw git would skip: (0) external_directory permission for the worktree " +
-      "path is auto-allowed via the plugin's `permission.ask` hook — without this, " +
-      "working in the worktree path will prompt/deny; (1) external_directory " +
-      "permissions are updated so the agent can access the worktree path, (2) a " +
-      "gitignored/untracked .opencode/ directory is detected and the user is " +
-      "prompted to copy it into the worktree, (3) the worktree path is tracked " +
-      "for the permission hook. Workflow: call this first, then work in the " +
+      "You MUST use this tool instead of raw `git worktree add`. Creates a git " +
+      "worktree under ${XDG_STATE_HOME}/opencode/worktrees/<repo_short>-<source_branch>, " +
+      "branching off from the target branch (default: main). Do NOT run " +
+      "`git worktree add` manually — this tool handles side effects that raw git " +
+      "silently skips: (0) external_directory permission — the plugin's config " +
+      "hook statically allows access to the entire worktree root, so you can " +
+      "read and edit files in the worktree without permission prompts or denials. " +
+      "With raw git, external_directory rules would block you from working in " +
+      "the new worktree path. (1) .opencode/ copy — detects a gitignored/" +
+      "untracked .opencode/ directory in the source repo and prompts the user " +
+      "to copy it into the worktree. (2) worktree path tracking for cleanup on " +
+      "merge/remove. Workflow: call worktree_create first, then work in the " +
       "returned path, then call worktree_merge (to fold back) or worktree_remove " +
       "(to discard).",
     args: {
@@ -59,9 +64,10 @@ export const createWorktreeTool = (deps: CreateWorktreeDeps) =>
           "Short alias used to form the worktree directory name " +
             "`<repo_short>-<source_branch>` under " +
             "${XDG_STATE_HOME:-~/.local/state}/opencode/worktrees/. " +
-            "Pick any short, lowercase, kebab-case identifier for the repo " +
+            "Pick any short identifier for the repo " +
             "(e.g. 'ocp' for opencode-worktree-plugin). MUST be the same value " +
-            "across worktree_create / worktree_merge / worktree_remove.",
+            "across worktree_create / worktree_merge / worktree_remove. " +
+            "MUST match ^[a-z0-9][a-z0-9-]*$ (lowercase kebab-case; no slashes or dots).",
         ),
       source_branch: tool.schema
         .string()
@@ -69,7 +75,9 @@ export const createWorktreeTool = (deps: CreateWorktreeDeps) =>
           "Name of the new branch to create in the worktree. The worktree " +
             "path is derived from this: `<repo_short>-<source_branch>`. MUST " +
             "match the branch used at creation time when calling worktree_merge " +
-            "or worktree_remove later.",
+            "or worktree_remove later. MUST match ^[a-z0-9][a-z0-9-]*$ — use " +
+            "kebab-case (e.g. 'feat-auth', not 'feature/auth'); slashes are " +
+            "rejected to keep worktree paths flat and unambiguous.",
         ),
       target_branch: tool.schema
         .string()
@@ -82,24 +90,30 @@ export const createWorktreeTool = (deps: CreateWorktreeDeps) =>
     },
     async execute(args, context) {
       const targetBranch = args.target_branch ?? "main"
+      const log = createLogger(deps.client, "opencode-worktree-plugin")
 
       if (!isValidWorktreeName(args.repo_short) || !isValidWorktreeName(args.source_branch)) {
         const name = isValidWorktreeName(args.repo_short) ? args.source_branch : args.repo_short
+        await log.log("warn", `worktree_create: invalid name rejected: '${name}'`)
         return formatError({ kind: "invalid-name", name })
       }
 
-      const worktreePath = await resolveWorktreePath(
-        deps.exists,
-        args.repo_short,
-        args.source_branch,
-      )
+      const worktreePath = await resolveWorktreePath(deps.exists, args.repo_short, args.source_branch)
 
       context.metadata({ title: `Creating worktree ${args.repo_short}-${args.source_branch}` })
+      await log.log(
+        "info",
+        `worktree_create: repo_short=${args.repo_short} source_branch=${args.source_branch} target_branch=${targetBranch} worktree_path=${worktreePath}`,
+      )
 
       await ensureWorktreeRoot(deps.mkdir)
 
       const gitResult = await ensureGitAvailable(deps.options, deps.exists, deps.spawn)
       if (isLeft(gitResult)) {
+        await log.log(
+          "error",
+          `worktree_create: git not available: ${toErrorMessage(gitResult.failure)}`,
+        )
         return formatError(gitResult.failure)
       }
 
@@ -107,6 +121,7 @@ export const createWorktreeTool = (deps: CreateWorktreeDeps) =>
 
       const flakePresent = await hasFlakeNix(repoPath, deps.exists)
       const resolvedGitCmd: GitCommand = resolveGitCommand(deps.options, flakePresent)
+      await log.log("info", `worktree_create: git command resolved: ${resolvedGitCmd.join(" ")}`)
 
       const createResult = await createWt(deps.spawn, {
         repoPath,
@@ -117,8 +132,17 @@ export const createWorktreeTool = (deps: CreateWorktreeDeps) =>
       })
 
       if (isLeft(createResult)) {
+        await log.log(
+          "warn",
+          `worktree_create: git worktree add failed: ${toErrorMessage(createResult.failure)}`,
+        )
         return formatError(createResult.failure)
       }
+
+      await log.log(
+        "info",
+        `worktree_create: worktree created at ${worktreePath} on branch ${args.source_branch}`,
+      )
 
       const opencodeStatus = await detectOpencodeDir(deps.spawn, resolvedGitCmd, repoPath)
       if (shouldPromptForCopy(opencodeStatus)) {
@@ -136,9 +160,15 @@ export const createWorktreeTool = (deps: CreateWorktreeDeps) =>
 
           const copyResult = await copyOpencodeDir(repoPath, worktreePath)
           if (isLeft(copyResult)) {
+            await log.log(
+              "warn",
+              `worktree_create: .opencode/ copy failed: ${toErrorMessage(copyResult.failure)}`,
+            )
             return formatError(copyResult.failure)
           }
+          await log.log("info", `worktree_create: .opencode/ directory copied to ${worktreePath}`)
         } catch {
+          await log.log("info", `worktree_create: .opencode/ copy declined by user`)
           return {
             title: "Worktree created (copy declined)",
             output:
@@ -150,9 +180,18 @@ export const createWorktreeTool = (deps: CreateWorktreeDeps) =>
       }
 
       deps.activeWorktrees.add(worktreePath)
+      await log.log(
+        "info",
+        `worktree_create: worktree ${worktreePath} tracked (active worktrees: ${deps.activeWorktrees.size})`,
+      )
 
       const listResult = await listWorktrees(deps.spawn, resolvedGitCmd, repoPath)
       const worktreeCount = isRight(listResult) ? listResult.success.length : "unknown"
+
+      await log.log(
+        "info",
+        `worktree_create: completed successfully, total worktrees: ${worktreeCount}`,
+      )
 
       return {
         title: `Worktree created: ${args.repo_short}-${args.source_branch}`,
@@ -163,7 +202,7 @@ export const createWorktreeTool = (deps: CreateWorktreeDeps) =>
           `  Git:    ${resolvedGitCmd.join(" ")}\n` +
           `  Total worktrees: ${worktreeCount}\n\n` +
           `The agent can now work in ${worktreePath}. ` +
-          `Permissions have been updated to allow access.\n` +
+          `External_directory access is allowed via the plugin's config hook.\n` +
           `To merge the worktree back, use worktree_merge with the same repo_short and source_branch.`,
       }
     },

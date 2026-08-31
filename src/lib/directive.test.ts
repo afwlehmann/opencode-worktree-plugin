@@ -22,7 +22,7 @@ describe("WORKTREE_DIRECTIVE", () => {
 
   it("explains the permission handling", () => {
     expect(WORKTREE_DIRECTIVE).toContain("external_directory")
-    expect(WORKTREE_DIRECTIVE).toContain("permission.ask")
+    expect(WORKTREE_DIRECTIVE).toContain("config hook")
   })
 
   it("mentions the .opencode/ copy", () => {
