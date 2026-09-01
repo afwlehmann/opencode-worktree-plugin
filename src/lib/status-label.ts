@@ -20,7 +20,12 @@ export const formatStatusLabel = (
   return nameEncodesBranch ? label : `${label}:${branch ?? "unknown"}`
 }
 
-export const formatWorktreeEntries = (entries: readonly string[]): string => entries.join(" + ")
+export const formatWorktreeEntries = (entries: readonly string[]): string => {
+  if (entries.length === 0) return ""
+  if (entries.length === 1) return entries[0] ?? ""
+  const latest = entries[entries.length - 1] ?? ""
+  return `${latest} (${entries.length})`
+}
 
 export const formatSessionStatusLabel = (
   directory: string,

@@ -86,8 +86,13 @@ describe("formatWorktreeEntries", () => {
     expect(formatWorktreeEntries(["config-feat"])).toBe("config-feat")
   })
 
-  it("joins multiple active worktrees", () => {
-    expect(formatWorktreeEntries(["config-feat", "config-fix"])).toBe("config-feat + config-fix")
+  it("shows the latest worktree with the total count", () => {
+    expect(formatWorktreeEntries(["config-feat", "config-fix"])).toBe("config-fix (2)")
+    expect(formatWorktreeEntries(["config-feat", "config-fix", "config-x"])).toBe("config-x (3)")
+  })
+
+  it("returns empty for no active worktrees", () => {
+    expect(formatWorktreeEntries([])).toBe("")
   })
 })
 
@@ -104,7 +109,7 @@ describe("formatSessionStatusLabel", () => {
   it("joins all active worktree entries", () => {
     expect(
       formatSessionStatusLabel(repoDir, "main", worktreeRoot, ["config-feat", "config-fix"]),
-    ).toBe("config-feat + config-fix")
+    ).toBe("config-fix (2)")
   })
 
   it("falls back to the directory derivation when no worktree is active", () => {

@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest"
+import * as path from "node:path"
+import * as os from "node:os"
 import type { Message, Part } from "@opencode-ai/sdk/v2"
 import type { TuiPluginModule } from "@opencode-ai/plugin/tui"
 import tuiModule from "./tui.js"
@@ -14,6 +16,8 @@ type RenderedNode = { tag?: unknown; props?: Record<string, unknown>; children?:
 
 type SlotRegistration = { order: number; slots: Record<string, unknown> }
 
+type DialogOption = { title: string; value: string; description: string }
+
 type MockApi = {
   theme: { current: Record<string, string> }
   route: { current: { name: string; params?: Record<string, unknown> } }
@@ -28,6 +32,15 @@ type MockApi = {
   }
   slots: { register: (registration: SlotRegistration) => void }
   event: { on: (name: string, handler: (event: never) => void) => void }
+  ui: {
+    dialog: { replace: (render: () => unknown, onClose?: () => void) => void; clear: () => void }
+    DialogSelect: (props: {
+      title: string
+      placeholder?: string
+      options: DialogOption[]
+      onSelect?: () => void
+    }) => never
+  }
 }
 
 type MockApiBundle = {
@@ -35,6 +48,7 @@ type MockApiBundle = {
   registrations: SlotRegistration[]
   handlers: Record<string, (event: never) => void>
   parts: Part[]
+  replacements: Array<{ render: () => unknown; onClose?: () => void }>
 }
 
 type MockApiOptions = {
@@ -49,6 +63,7 @@ const mockApi = ({
   const registrations: SlotRegistration[] = []
   const handlers: Record<string, (event: never) => void> = {}
   const parts: Part[] = []
+  const replacements: Array<{ render: () => unknown; onClose?: () => void }> = []
   const sessionMessage: Message = { id: "m1", role: "assistant" } as unknown as Message
   const api: MockApi = {
     theme: { current: { textMuted: "#808080" } },
@@ -64,8 +79,20 @@ const mockApi = ({
     },
     slots: { register: (registration) => registrations.push(registration) },
     event: { on: (name, handler) => (handlers[name] = handler) },
+    ui: {
+      dialog: {
+        replace: (render, onClose) => {
+          replacements.push({ render, onClose })
+        },
+        clear: () => {
+          replacements.length = 0
+        },
+      },
+      DialogSelect: (props: { title: string; options: DialogOption[]; onSelect?: () => void }) =>
+        ({ props }) as never,
+    },
   }
-  return { api, registrations, handlers, parts }
+  return { api, registrations, handlers, parts, replacements }
 }
 
 const activate = async (bundle: MockApiBundle): Promise<void> => {
@@ -121,6 +148,35 @@ const renderSlotLabel = (bundle: MockApiBundle): string => {
   return collectStrings(rendered).join(" ")
 }
 
+const findNode = (node: unknown, predicate: (node: object) => boolean): object | undefined => {
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const found = findNode(child, predicate)
+      if (found !== undefined) return found
+    }
+    return undefined
+  }
+  if (typeof node === "object" && node !== null) {
+    if (predicate(node)) return node
+    const children = (node as { children?: unknown }).children
+    return children === undefined ? undefined : findNode(children, predicate)
+  }
+  return undefined
+}
+
+const clickWorktreeLabel = (bundle: MockApiBundle): void => {
+  const registration = bundle.registrations[0]
+  expect(registration).toBeDefined()
+  const rendered = (registration.slots["app_bottom"] as () => unknown)()
+  const label = findNode(rendered, (node) => {
+    const props = (node as { props?: Record<string, unknown> }).props
+    return typeof props?.["onMouseDown"] === "function"
+  })
+  expect(label).toBeDefined()
+  const props = (label as { props: Record<string, unknown> }).props
+  ;(props["onMouseDown"] as () => void)()
+}
+
 describe("tui plugin wiring (mock api)", () => {
   it("registers exactly one slot group targeting app_bottom", async () => {
     const bundle = mockApi()
@@ -164,7 +220,7 @@ describe("tui plugin wiring (mock api)", () => {
     expect(renderSlotLabel(bundle)).toContain("integ-feat-e2e")
   })
 
-  it("renders multiple concurrently active worktrees joined", async () => {
+  it("renders the latest worktree with a count for several concurrently active ones", async () => {
     const bundle = mockApi({ branch: "main" })
     await activate(bundle)
     enterSession(bundle, "s1")
@@ -172,7 +228,70 @@ describe("tui plugin wiring (mock api)", () => {
     dispatchPartUpdated(bundle, worktreeToolPart("worktree_create", "integ", "feat"))
     dispatchPartUpdated(bundle, worktreeToolPart("worktree_create", "integ", "fix"))
 
-    expect(renderSlotLabel(bundle)).toContain("integ-feat + integ-fix")
+    expect(renderSlotLabel(bundle)).toContain("integ-fix (2)")
+  })
+
+  it("opens a worktree dialog with absolute paths when the label is clicked", async () => {
+    const bundle = mockApi({ branch: "main" })
+    await activate(bundle)
+    enterSession(bundle, "s1")
+
+    dispatchPartUpdated(bundle, worktreeToolPart("worktree_create", "integ", "feat"))
+    dispatchPartUpdated(bundle, worktreeToolPart("worktree_create", "integ", "fix"))
+
+    clickWorktreeLabel(bundle)
+
+    expect(bundle.replacements).toHaveLength(1)
+    const dialog = bundle.replacements[0].render() as {
+      props: { title: string; options: DialogOption[] }
+    }
+    expect(dialog.props.title).toBe("Active worktrees")
+    const worktreeRoot = path.join(os.homedir(), ".local", "state", "opencode", "worktrees")
+    expect(dialog.props.options).toEqual([
+      {
+        title: "integ-feat",
+        value: "integ-feat",
+        description: path.join(worktreeRoot, "integ-feat"),
+      },
+      { title: "integ-fix", value: "integ-fix", description: path.join(worktreeRoot, "integ-fix") },
+    ])
+  })
+
+  it("opens a dialog with the session directory when no worktree is active", async () => {
+    const bundle = mockApi({ branch: "main", directory: "/Users/test/src/git/config" })
+    await activate(bundle)
+    enterSession(bundle, "s1")
+
+    clickWorktreeLabel(bundle)
+
+    const dialog = bundle.replacements[0].render() as {
+      props: { title: string; options: DialogOption[] }
+    }
+    expect(dialog.props.options).toEqual([
+      {
+        title: "config",
+        value: "/Users/test/src/git/config",
+        description: "/Users/test/src/git/config",
+      },
+    ])
+  })
+
+  it("closes the dialog on selection", async () => {
+    const bundle = mockApi({ branch: "main" })
+    await activate(bundle)
+    enterSession(bundle, "s1")
+
+    dispatchPartUpdated(bundle, worktreeToolPart("worktree_create", "integ", "feat"))
+    clickWorktreeLabel(bundle)
+    expect(bundle.replacements).toHaveLength(1)
+
+    bundle.replacements[0]?.render()
+    const dialog = bundle.replacements[0].render() as {
+      props: { onSelect?: () => void }
+    }
+    dialog.props.onSelect?.()
+
+    expect(bundle.replacements).toHaveLength(0)
   })
 
   it("falls back to the directory label after worktree_merge", async () => {

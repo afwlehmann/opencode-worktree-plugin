@@ -1,4 +1,5 @@
 import { Show } from "solid-js"
+import * as path from "node:path"
 import type { Message, Part } from "@opencode-ai/sdk/v2"
 import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui"
 import type { PluginOptions } from "./types.js"
@@ -36,6 +37,8 @@ const tuiPlugin: TuiPlugin = async (api, options) => {
   } catch {
     flakePresent = false
   }
+
+  const worktreeRoot = getWorktreeRoot()
 
   let seedCalls: readonly WorktreeToolCall[] = []
   let eventCalls: readonly WorktreeToolCall[] = []
@@ -79,8 +82,34 @@ const tuiPlugin: TuiPlugin = async (api, options) => {
     return formatSessionStatusLabel(
       api.state.path.directory,
       api.state.vcs?.branch,
-      getWorktreeRoot(),
+      worktreeRoot,
       entries,
+    )
+  }
+
+  const openWorktreeDialog = (): void => {
+    const entries = ensureWorktreeEntries(currentSessionID())
+    const options =
+      entries.length > 0
+        ? entries.map((name) => ({
+            title: name,
+            value: name,
+            description: path.join(worktreeRoot, name),
+          }))
+        : [
+            {
+              title: path.basename(api.state.path.directory),
+              value: api.state.path.directory,
+              description: api.state.path.directory,
+            },
+          ]
+    api.ui.dialog.replace(() =>
+      api.ui.DialogSelect<string>({
+        title: "Active worktrees",
+        placeholder: "worktrees",
+        options,
+        onSelect: () => api.ui.dialog.clear(),
+      }),
     )
   }
 
@@ -98,7 +127,9 @@ const tuiPlugin: TuiPlugin = async (api, options) => {
             paddingRight={1}
             flexShrink={0}
           >
-            <text fg={t.textMuted}>{currentStatusLabel()}</text>
+            <text fg={t.textMuted} onMouseDown={openWorktreeDialog}>
+              {currentStatusLabel()}
+            </text>
             <Show when={currentStatusText()}>
               {(status) => <text fg={t.info}>[{status()}]</text>}
             </Show>
