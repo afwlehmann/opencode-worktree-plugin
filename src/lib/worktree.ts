@@ -437,7 +437,8 @@ export const mergeWorktree = async (
       kind: "not-fast-forward",
       sourceBranch,
       targetBranch,
-      stderr: "fast-forward is not possible and the merge strategy requires fast-forward-only merges",
+      stderr:
+        "fast-forward is not possible and the merge strategy requires fast-forward-only merges",
     })
   }
 
