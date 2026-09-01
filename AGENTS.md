@@ -4,18 +4,18 @@
 
 All commands should be run via `nix develop -c` to use the pinned dev environment.
 
-| Task       | Command                            |
-| ---------- | ---------------------------------- |
-| Install    | `nix develop -c npm ci`            |
-| Build      | `nix develop -c npm run build`     |
-| Test       | `nix develop -c npm test`          |
-| Unit tests | `nix develop -c npm run test:unit` |
-| Typecheck  | `nix develop -c npm run typecheck` |
-| Lint       | `nix develop -c npm run lint`      |
-| Format     | `nix develop -c npm run format`    |
-| Lockfile   | `npm install --package-lock-only`  |
-| Nix build  | `nix build .#default`              |
-| Dev shell  | `nix develop`                      |
+| Task       | Command                                          |
+| ---------- | ------------------------------------------------ |
+| Install    | `nix develop -c npm ci`                          |
+| Build      | `nix develop -c npm run build`                   |
+| Test       | `nix develop -c npm test`                        |
+| Unit tests | `nix develop -c npm run test:unit`               |
+| Typecheck  | `nix develop -c npm run typecheck`               |
+| Lint       | `nix develop -c npm run lint`                    |
+| Format     | `nix develop -c npm run format`                  |
+| Lockfile   | `nix develop -c npm install --package-lock-only` |
+| Nix build  | `nix build .#default`                            |
+| Dev shell  | `nix develop`                                    |
 
 ## Architecture
 
@@ -51,7 +51,8 @@ Two entry points (SDK enforces `server?: never` / `tui?: never`):
 - **Permission model**: the `config` hook statically allows `${worktreeRoot}/**` (unresolved + realpath roots) at init; the `permission.ask` hook allows any path inside the same roots via `isInsideWorktreeRoot`. No process-local tracking — several opencode instances sharing a project stay consistent because permissions derive from the durable static allow and all worktree/branch state from git itself. The only in-memory state in the plugin is the TUI plugin's render closures.
 - **`preferNixDevelop` option**: when `true` and `flake.nix` is present, git runs via `nix develop -c git`.
 - **`mergeStrategy` option**: `"ff-only"` (default) keeps the opinionated fast-forward-only behavior; `"repo-config"` makes `worktree_merge` follow the repository's `merge.ff` configuration. Unrecognized values fall back to `ff-only` in `resolveOptions`.
-- **npmDepsHash**: must match `package-lock.json`. Whenever the lockfile changes (dependency updates, version bumps — run `npm install --package-lock-only` to sync the version), recompute it: run `nix build .#default`, copy the `got:` sha256 from the hash-mismatch error into `flake.nix`, rebuild to confirm. CI builds the nix package, so a stale hash fails CI. The package `version` is read from `package.json` via `lib.importJSON` — never hardcode it in `flake.nix`.
+- **npmDepsHash**: must match `package-lock.json`. Whenever the lockfile changes (dependency updates, version bumps — run `nix develop -c npm install --package-lock-only` to sync the version; an unpinned system npm also strips `"dev": true` markers from optional platform packages and pollutes the diff), recompute it: run `nix build .#default`, copy the `got:` sha256 from the hash-mismatch error into `flake.nix`, rebuild to confirm. CI builds the nix package, so a stale hash fails CI. The package `version` is read from `package.json` via `lib.importJSON` — never hardcode it in `flake.nix`.
+- **Releases**: version bumps are committed as `chore(release): vX.Y.Z` and always tagged with an annotated tag `vX.Y.Z` (`git tag -a vX.Y.Z -m "vX.Y.Z"`) on the release commit — never a lightweight tag.
 - **Tests**: co-located `*.test.ts` files, run with `nix develop -c npm test`.
 
 ## TUI typecheck note
