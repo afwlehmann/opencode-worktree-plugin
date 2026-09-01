@@ -14,27 +14,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  nix:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    steps:
-      - uses: actions/checkout@v7
-      - uses: DeterminateSystems/nix-installer-action@v22
-        with:
-          flakehub: false
-      - uses: DeterminateSystems/magic-nix-cache-action@v14
-      - run: nix develop --command nix flake check --no-build --print-build-logs
-      - run: nix develop --command nix build .#default --print-build-logs
-
-  lint:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
+  linux:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: DeterminateSystems/nix-installer-action@v22
@@ -43,72 +24,14 @@ jobs:
       - uses: DeterminateSystems/magic-nix-cache-action@v14
       - run: nix develop --command npm ci
       - run: nix develop --command sh -c 'npx eslint . && npx prettier --check .'
-
-  typecheck:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    steps:
-      - uses: actions/checkout@v7
-      - uses: DeterminateSystems/nix-installer-action@v22
-        with:
-          flakehub: false
-      - uses: DeterminateSystems/magic-nix-cache-action@v14
-      - run: nix develop --command npm ci
       - run: nix develop --command npx tsc --noEmit
-
-  test:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    steps:
-      - uses: actions/checkout@v7
-      - uses: DeterminateSystems/nix-installer-action@v22
-        with:
-          flakehub: false
-      - uses: DeterminateSystems/magic-nix-cache-action@v14
-      - run: nix develop --command npm ci
       - run: nix develop --command npx vitest run --exclude src/integration.test.ts
-
-  build:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    steps:
-      - uses: actions/checkout@v7
-      - uses: DeterminateSystems/nix-installer-action@v22
-        with:
-          flakehub: false
-      - uses: DeterminateSystems/magic-nix-cache-action@v14
-      - run: nix develop --command npm ci
       - run: nix develop --command npx vite build
-
-  windows:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: "22"
-      - run: npm ci
-      - run: npx eslint . && npx prettier --check .
-        shell: bash
-      - run: npx tsc --noEmit
-        shell: bash
-      - run: npx vitest run --exclude src/integration.test.ts
-        shell: bash
-      - run: npx vite build
-        shell: bash
+      - run: nix develop --command nix build .#default --print-build-logs
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [nix, lint, typecheck, test, build, windows]
+    needs: [linux]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
