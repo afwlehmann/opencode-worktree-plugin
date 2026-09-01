@@ -29,7 +29,7 @@ Two entry points (SDK enforces `server?: never` / `tui?: never`):
 - `src/lib/paths.ts` — XDG state dir resolution (`${XDG_STATE_HOME:-~/.local/state}/opencode/worktrees/<repo>-<branch>`)
 - `src/lib/git-env.ts` — git command resolution (`git` vs `nix develop -c git`), PATH enforcement, flake detection
 - `src/lib/worktree.ts` — pure git operations (create, FF-only merge, remove, branch delete after verified merge into target)
-- `src/lib/permissions.ts` — `external_directory` permission rule management: static `config`-hook allow for the worktree root (`addWorktreeRootAllow`) and the `permission.ask` hook helper (`isActiveWorktreePath`)
+- `src/lib/permissions.ts` — `external_directory` permission management: static `config`-hook allow for the worktree root (`addWorktreeRootAllow`) and the boundary-safe root check the `permission.ask` backstop uses (`isInsideWorktreeRoot`)
 - `src/lib/opencode-dir.ts` — gitignored `.opencode/` detection and copy
 - `src/lib/directive.ts` — system-prompt directive injected via `experimental.chat.system.transform`
 - `src/lib/logger.ts` — `createLogger` helper: wraps `client.app.log` for structured info/warn/error logging from tools
@@ -47,7 +47,7 @@ Two entry points (SDK enforces `server?: never` / `tui?: never`):
 - **Name validation**: `repo_short` and `source_branch` must match `^[a-z0-9][a-z0-9-]*$` (prevents path traversal and repo/branch name collisions). Worktree paths are symlink-resolved to match git's porcelain output.
 - **Tool descriptions**: agents MUST use the plugin tools instead of raw git worktree commands. Descriptions explicitly say "You MUST use this tool" and "Do NOT run `git worktree add/remove`/`git merge`/`git branch -d` manually".
 - **Logging**: tools log all interesting operations at info level via `createLogger` (`src/lib/logger.ts`), warnings for recoverable failures, errors for git-unavailable. Operations are infrequent so info-level logging won't spam.
-- **Permission lifecycle**: `config` hook statically allows `${worktreeRoot}/**` at init. `worktree_create` adds the worktree path to `activeWorktrees`. `worktree_merge`/`worktree_remove` remove it from `activeWorktrees` after worktree removal but before branch deletion.
+- **Permission model**: the `config` hook statically allows `${worktreeRoot}/**` (unresolved + realpath roots) at init; the `permission.ask` hook allows any path inside the same roots via `isInsideWorktreeRoot`. No process-local tracking — several opencode instances sharing a project stay consistent because permissions derive from the durable static allow and all worktree/branch state from git itself. The only in-memory state in the plugin is the TUI plugin's render closures.
 - **`preferNixDevelop` option**: when `true` and `flake.nix` is present, git runs via `nix develop -c git`.
 - **npmDepsHash**: must match `package-lock.json`. Whenever the lockfile changes (dependency updates, version bumps — run `npm install --package-lock-only` to sync the version), recompute it: run `nix build .#default`, copy the `got:` sha256 from the hash-mismatch error into `flake.nix`, rebuild to confirm. CI builds the nix package, so a stale hash fails CI. The package `version` is read from `package.json` via `lib.importJSON` — never hardcode it in `flake.nix`.
 - **Tests**: co-located `*.test.ts` files, run with `nix develop -c npm test`.

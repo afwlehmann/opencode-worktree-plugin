@@ -21,7 +21,6 @@ export type MergeWorktreeDeps = {
   readonly spawn: SpawnFn
   readonly exists: PathExistsFn
   readonly options: ResolvedOptions
-  readonly activeWorktrees: Set<string>
   readonly client: OpencodeClient
 }
 
@@ -33,12 +32,11 @@ export const mergeWorktreeTool = (deps: MergeWorktreeDeps) =>
       "the target branch using fast-forward merge only — without checking out " +
       "the target branch in the main working copy when it is not already " +
       "checked out (no surprise branch switches). On success: the worktree " +
-      "is removed, the worktree's external_directory permission tracking is " +
-      "cleaned up, and the source branch is deleted only after verifying it is " +
+      "is removed and the source branch is deleted only after verifying it is " +
       "fully merged into the target. Do NOT run `git merge`, `git worktree " +
       "remove`, or `git branch -d` manually for worktree branches — this tool " +
-      "handles the permission cleanup and branch-delete safety that raw git " +
-      "skips. If the merge cannot fast-forward, rebase the worktree branch " +
+      "enforces the fast-forward-only and branch-delete safety rules that raw " +
+      "git skips. If the merge cannot fast-forward, rebase the worktree branch " +
       "onto the target first, then retry. Workflow: call worktree_create first, " +
       "then this to fold changes back.",
     args: {
@@ -168,12 +166,6 @@ export const mergeWorktreeTool = (deps: MergeWorktreeDeps) =>
 
       await log.log("info", `worktree_merge: worktree removed at ${worktreePath}`)
 
-      deps.activeWorktrees.delete(worktreePath)
-      await log.log(
-        "info",
-        `worktree_merge: external_directory permission tracking cleaned up for ${worktreePath} (active worktrees: ${deps.activeWorktrees.size})`,
-      )
-
       const deleteResult = await deleteBranch(
         deps.spawn,
         gitCmd,
@@ -207,7 +199,6 @@ export const mergeWorktreeTool = (deps: MergeWorktreeDeps) =>
           `  Merged:      ${args.source_branch} → ${targetBranch} (fast-forward, ` +
           `${mergeMode === "ref-only" ? "target ref updated — main working copy untouched" : "main working copy updated"})\n` +
           `  Worktree:    ${worktreePath} — removed\n` +
-          `  Permissions: tracking cleaned up\n` +
           `  Branch:      ${args.source_branch} — deleted\n`,
       }
     },

@@ -185,7 +185,7 @@ describe.skipIf(!canRun)("integration (opencode run)", () => {
     expect(output).toContain("worktree_create:")
     expect(output).toContain("worktree_merge:")
     expect(output).toContain("fast-forward merged")
-    expect(output).toContain("permission tracking cleaned up")
+    expect(output).toContain("worktree removed")
   })
 
   it("create → remove (discard without merge)", { timeout: 120000 }, async () => {
@@ -206,7 +206,7 @@ describe.skipIf(!canRun)("integration (opencode run)", () => {
 
     expect(output).toContain("worktree_create:")
     expect(output).toContain("worktree_remove:")
-    expect(output).toContain("permission tracking cleaned up")
+    expect(output).toContain("worktree removed")
   })
 
   it("create → write (uncommitted) → remove refuses", { timeout: 120000 }, async () => {

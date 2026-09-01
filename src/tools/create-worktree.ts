@@ -36,7 +36,6 @@ export type CreateWorktreeDeps = {
   readonly exists: PathExistsFn
   readonly mkdir: (path: string, opts: { recursive: boolean }) => Promise<void>
   readonly options: ResolvedOptions
-  readonly activeWorktrees: Set<string>
   readonly client: OpencodeClient
 }
 
@@ -50,13 +49,12 @@ export const createWorktreeTool = (deps: CreateWorktreeDeps) =>
       "silently skips: (0) external_directory permission — the plugin's config " +
       "hook statically allows access to the entire worktree root, so you can " +
       "read and edit files in the worktree without permission prompts or denials. " +
-      "With raw git, external_directory rules would block you from working in " +
-      "the new worktree path. (1) .opencode/ copy — detects a gitignored/" +
+      "With raw git, a worktree created outside that root requires per-path " +
+      "external_directory approval. (1) .opencode/ copy — detects a gitignored/" +
       "untracked .opencode/ directory in the source repo and prompts the user " +
-      "to copy it into the worktree. (2) worktree path tracking for cleanup on " +
-      "merge/remove. Workflow: call worktree_create first, then work in the " +
-      "returned path, then call worktree_merge (to fold back) or worktree_remove " +
-      "(to discard).",
+      "to copy it into the worktree. Workflow: call worktree_create first, then " +
+      "work in the returned path, then call worktree_merge (to fold back) or " +
+      "worktree_remove (to discard).",
     args: {
       repo_short: tool.schema
         .string()
@@ -182,12 +180,6 @@ export const createWorktreeTool = (deps: CreateWorktreeDeps) =>
           }
         }
       }
-
-      deps.activeWorktrees.add(worktreePath)
-      await log.log(
-        "info",
-        `worktree_create: worktree ${worktreePath} tracked (active worktrees: ${deps.activeWorktrees.size})`,
-      )
 
       const listResult = await listWorktrees(deps.spawn, resolvedGitCmd, repoPath)
       const worktreeCount = isRight(listResult) ? listResult.success.length : "unknown"

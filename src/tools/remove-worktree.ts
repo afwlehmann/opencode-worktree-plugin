@@ -17,7 +17,6 @@ export type RemoveWorktreeDeps = {
   readonly spawn: SpawnFn
   readonly exists: PathExistsFn
   readonly options: ResolvedOptions
-  readonly activeWorktrees: Set<string>
   readonly client: OpencodeClient
 }
 
@@ -25,12 +24,11 @@ export const removeWorktreeTool = (deps: RemoveWorktreeDeps) =>
   tool({
     description:
       "You MUST use this tool instead of raw `git worktree remove`. Removes a " +
-      "worktree without merging, then cleans up the worktree's external_directory " +
-      "permission tracking. Refuses if uncommitted changes exist (a safety check " +
-      "raw git skips). Do NOT run `git worktree remove` manually — this tool " +
-      "handles the permission tracking cleanup that raw git skips. The branch " +
-      "is NOT deleted — use worktree_merge for the full merge + branch delete + " +
-      "cleanup flow.",
+      "worktree without merging. Refuses if uncommitted changes exist (a safety " +
+      "check raw git skips). Do NOT run `git worktree remove` manually — the " +
+      "refusal guard protects against discarding uncommitted work. The branch " +
+      "is NOT deleted — use worktree_merge for the full merge + branch delete " +
+      "flow.",
     args: {
       repo_short: tool.schema
         .string()
@@ -102,12 +100,6 @@ export const removeWorktreeTool = (deps: RemoveWorktreeDeps) =>
 
       await log.log("info", `worktree_remove: worktree removed at ${worktreePath}`)
 
-      deps.activeWorktrees.delete(worktreePath)
-      await log.log(
-        "info",
-        `worktree_remove: external_directory permission tracking cleaned up for ${worktreePath} (active worktrees: ${deps.activeWorktrees.size})`,
-      )
-
       await log.log("info", `worktree_remove: completed successfully`)
 
       return {
@@ -115,8 +107,7 @@ export const removeWorktreeTool = (deps: RemoveWorktreeDeps) =>
         output:
           `Worktree removed successfully.\n\n` +
           `  Path:   ${worktreePath} — removed\n` +
-          `  Branch: ${args.source_branch} — NOT deleted (use worktree_merge for merge + delete)\n` +
-          `  Permissions: tracking cleaned up\n`,
+          `  Branch: ${args.source_branch} — NOT deleted (use worktree_merge for merge + delete)\n`,
       }
     },
   })
