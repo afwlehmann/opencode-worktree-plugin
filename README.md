@@ -8,7 +8,7 @@ The main point: the agent drives the whole worktree lifecycle itself — it deci
 
 ## What it is
 
-- **Three agent tools** — `worktree_create`, `worktree_merge`, `worktree_remove`. Worktrees live under `${XDG_STATE_HOME:-~/.local/state}/opencode/worktrees/<repo>-<branch>`.
+- **Four agent tools** — `worktree_create`, `worktree_merge`, `worktree_remove`, and `worktree_list` (rediscover existing worktrees with their branch and clean/uncommitted status, e.g. after compaction). Worktrees live under `${XDG_STATE_HOME:-~/.local/state}/opencode/worktrees/<repo>-<branch>`.
 - **Safety-first git** — fast-forward-only merges, branch deletion only after a verified merge, refusal to remove worktrees with uncommitted changes, never `--force`.
 - **Permission-aware** — the worktree root is statically allowed for `external_directory`, so the agent can read and edit inside worktrees without prompts, even under a catch-all deny.
 - **Single-session** — the agent keeps working in _your_ session; worktrees are just directories it edits. A TUI status bar tracks the active worktrees (e.g. `config-fix (3)`); clicking it lists their absolute paths with clipboard copy.

@@ -265,6 +265,37 @@ export const deleteBranch = async (
   return right(undefined)
 }
 
+export type WorktreeListEntry = {
+  readonly path: string
+  readonly head?: string
+  readonly branch?: string
+  readonly bare?: boolean
+  readonly detached?: boolean
+}
+
+export const parseWorktreeList = (porcelain: string): readonly WorktreeListEntry[] =>
+  porcelain.split("\n").reduce<readonly WorktreeListEntry[]>((entries, line) => {
+    const current = entries[entries.length - 1]
+    if (line.startsWith("worktree ")) {
+      return [...entries, { path: line.slice("worktree ".length) }]
+    }
+    if (current === undefined) return entries
+    const replace = (updated: WorktreeListEntry): readonly WorktreeListEntry[] => [
+      ...entries.slice(0, -1),
+      updated,
+    ]
+    if (line.startsWith("HEAD ")) return replace({ ...current, head: line.slice("HEAD ".length) })
+    if (line.startsWith("branch ")) {
+      return replace({
+        ...current,
+        branch: line.slice("branch ".length).replace(/^refs\/heads\//, ""),
+      })
+    }
+    if (line === "bare") return replace({ ...current, bare: true })
+    if (line === "detached") return replace({ ...current, detached: true })
+    return entries
+  }, [])
+
 export const listWorktrees = async (
   spawn: SpawnFn,
   gitCmd: GitCommand,
@@ -273,12 +304,7 @@ export const listWorktrees = async (
   const result = await runGitOrError(gitCmd, spawn, ["worktree", "list", "--porcelain"], repoPath)
   if (isLeft(result)) return left(result.failure)
 
-  const paths = result.success
-    .split("\n")
-    .filter((line) => line.startsWith("worktree "))
-    .map((line) => line.slice("worktree ".length))
-
-  return right(paths)
+  return right(parseWorktreeList(result.success).map((entry) => entry.path))
 }
 
 export type { SpawnResult }

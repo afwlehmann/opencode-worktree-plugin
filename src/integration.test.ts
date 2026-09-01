@@ -158,19 +158,21 @@ describe.skipIf(!canRun)("integration (opencode run)", () => {
   const wtPath = (repoShort: string, branch: string) =>
     path.join(xdgStateHome, "opencode", "worktrees", `${repoShort}-${branch}`)
 
-  it("create → write → commit → merge", { timeout: 120000 }, async () => {
+  it("create → write → list (uncommitted) → commit → merge", { timeout: 120000 }, async () => {
     const { output, exitCode } = runOpencode(
       `Do these steps in order:
 1. Call worktree_create with repo_short='integ', source_branch='feat-e2e', target_branch='main'.
-2. Use the Write tool to create a file at the returned worktree path plus '/feature.txt' with content 'test feature'.
-3. Use the Bash tool to run: cd <worktree_path> && git add -A && git commit -m 'add feature'.
-4. Call worktree_merge with repo_short='integ', source_branch='feat-e2e', target_branch='main'.
-5. Report whether each step succeeded.`,
+2. Use the Write tool to create a file at the returned worktree path plus '/feature.txt' with content 'test feature'. Do NOT commit yet.
+3. Call worktree_list with no arguments and report whether the worktree shows as uncommitted.
+4. Use the Bash tool to run: cd <worktree_path> && git add -A && git commit -m 'add feature'.
+5. Call worktree_merge with repo_short='integ', source_branch='feat-e2e', target_branch='main'.
+6. Report whether each step succeeded.`,
     )
 
     expect(exitCode).toBe(0)
 
     expect(output).toContain("Worktree created")
+    expect(output).toContain("uncommitted")
     expect(output).toContain("Merged")
 
     expect(existsSync(wtPath("integ", "feat-e2e"))).toBe(false)
@@ -183,6 +185,7 @@ describe.skipIf(!canRun)("integration (opencode run)", () => {
     expect(git(repoPath, "log", "--oneline").stdout).toContain("add feature")
 
     expect(output).toContain("worktree_create:")
+    expect(output).toContain("worktree_list:")
     expect(output).toContain("worktree_merge:")
     expect(output).toContain("fast-forward merged")
     expect(output).toContain("worktree removed")

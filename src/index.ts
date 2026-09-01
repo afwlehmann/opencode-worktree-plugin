@@ -4,6 +4,7 @@ import { resolveOptions, isLeft } from "./types.js"
 import { createWorktreeTool } from "./tools/create-worktree.js"
 import { mergeWorktreeTool } from "./tools/merge-worktree.js"
 import { removeWorktreeTool } from "./tools/remove-worktree.js"
+import { listWorktreesTool } from "./tools/list-worktrees.js"
 import {
   defaultSpawn,
   defaultExists,
@@ -58,6 +59,12 @@ const serverPlugin: Plugin = async ({ client, directory }, options) => {
         client,
       }),
       worktree_remove: removeWorktreeTool({
+        spawn: defaultSpawn,
+        exists: defaultExists,
+        options: opts,
+        client,
+      }),
+      worktree_list: listWorktreesTool({
         spawn: defaultSpawn,
         exists: defaultExists,
         options: opts,

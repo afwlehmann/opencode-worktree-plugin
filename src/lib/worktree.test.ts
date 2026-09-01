@@ -5,6 +5,7 @@ import {
   mergeWorktree,
   deleteBranch,
   createWorktree,
+  parseWorktreeList,
   resolveDefaultBranch,
 } from "./worktree.js"
 import type { Either, WorktreeError } from "../types.js"
@@ -291,5 +292,46 @@ describe("resolveDefaultBranch", () => {
       "git config --get init.defaultBranch": fail(),
     })
     expect(await resolveDefaultBranch(["git"], spawn, "/repo")).toBe("main")
+  })
+})
+
+describe("parseWorktreeList", () => {
+  it("parses branch, detached, and bare entries", () => {
+    const porcelain = [
+      "worktree /repo",
+      "HEAD 111",
+      "branch refs/heads/main",
+      "",
+      "worktree /root/ocp-feat",
+      "HEAD 222",
+      "branch refs/heads/feat",
+      "",
+      "worktree /other",
+      "HEAD 333",
+      "detached",
+      "",
+      "worktree /bare-repo",
+      "bare",
+    ].join("\n")
+
+    expect(parseWorktreeList(porcelain)).toEqual([
+      { path: "/repo", head: "111", branch: "main" },
+      { path: "/root/ocp-feat", head: "222", branch: "feat" },
+      { path: "/other", head: "333", detached: true },
+      { path: "/bare-repo", bare: true },
+    ])
+  })
+
+  it("strips the refs/heads prefix from branch names", () => {
+    const porcelain = "worktree /repo\nbranch refs/heads/release/1.2\n"
+    expect(parseWorktreeList(porcelain)[0]?.branch).toBe("release/1.2")
+  })
+
+  it("returns empty for empty porcelain output", () => {
+    expect(parseWorktreeList("")).toEqual([])
+  })
+
+  it("ignores lines before the first worktree line", () => {
+    expect(parseWorktreeList("junk\nHEAD 111\n")).toEqual([])
   })
 })

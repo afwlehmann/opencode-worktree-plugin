@@ -7,10 +7,11 @@ describe("WORKTREE_DIRECTIVE", () => {
     expect(WORKTREE_DIRECTIVE.length).toBeGreaterThan(0)
   })
 
-  it("names all three tools", () => {
+  it("names all four tools", () => {
     expect(WORKTREE_DIRECTIVE).toContain("worktree_create")
     expect(WORKTREE_DIRECTIVE).toContain("worktree_merge")
     expect(WORKTREE_DIRECTIVE).toContain("worktree_remove")
+    expect(WORKTREE_DIRECTIVE).toContain("worktree_list")
   })
 
   it("forbids raw git worktree commands", () => {
