@@ -115,6 +115,21 @@ export const mergeWorktreeTool = (deps: MergeWorktreeDeps) =>
       })
 
       if (isLeft(mergeResult)) {
+        if (mergeResult.failure.kind === "target-dirty") {
+          await log.log(
+            "warn",
+            `worktree_merge: main working copy dirty: ${toErrorMessage(mergeResult.failure)}`,
+          )
+          return {
+            title: "Merge refused — uncommitted changes in the main working copy",
+            output:
+              toErrorMessage(mergeResult.failure) +
+              "\n\nThe merge was NOT attempted. Do NOT rebase the worktree branch — the " +
+              "source branch is fine; only the main working copy is blocked. If another " +
+              "session owns those changes, wait for it to commit them, or ask the user " +
+              "to stash them.",
+          }
+        }
         if (mergeResult.failure.kind === "not-fast-forward") {
           await log.log(
             "warn",

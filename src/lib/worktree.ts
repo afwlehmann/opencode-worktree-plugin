@@ -145,6 +145,35 @@ export const resolveDefaultBranch = async (
 
 export type MergeMode = "working-copy" | "ref-only"
 
+const statusPaths = async (
+  gitCmd: GitCommand,
+  spawn: SpawnFn,
+  repoPath: string,
+): Promise<readonly string[]> => {
+  const result = await runGit(gitCmd, spawn, ["status", "--porcelain", "-uall"], repoPath)
+  if (result.exitCode !== 0) return []
+  return result.stdout.split("\n").flatMap((line) => {
+    if (line === "" || line.length < 4) return []
+    return line.slice(3).split(" -> ")
+  })
+}
+
+const pathsChangedByMerge = async (
+  gitCmd: GitCommand,
+  spawn: SpawnFn,
+  repoPath: string,
+  sourceBranch: string,
+): Promise<readonly string[]> => {
+  const result = await runGit(
+    gitCmd,
+    spawn,
+    ["diff", "--name-only", "HEAD", sourceBranch],
+    repoPath,
+  )
+  if (result.exitCode !== 0) return []
+  return result.stdout.split("\n").filter((line) => line !== "")
+}
+
 export const mergeWorktree = async (
   spawn: SpawnFn,
   input: MergeWorktreeInput,
@@ -165,6 +194,17 @@ export const mergeWorktree = async (
 
   const onTarget = (await currentBranch(gitCmd, spawn, repoPath)) === targetBranch
 
+  if (onTarget) {
+    const dirty = await statusPaths(gitCmd, spawn, repoPath)
+    if (dirty.length > 0) {
+      const changed = await pathsChangedByMerge(gitCmd, spawn, repoPath, sourceBranch)
+      const blocking = dirty.filter((path) => changed.includes(path))
+      if (blocking.length > 0) {
+        return left({ kind: "target-dirty", path: repoPath, files: blocking })
+      }
+    }
+  }
+
   const result = onTarget
     ? await runGit(gitCmd, spawn, ["merge", "--ff-only", sourceBranch], repoPath)
     : await runGit(gitCmd, spawn, ["fetch", ".", `${sourceBranch}:${targetBranch}`], repoPath)
@@ -174,7 +214,7 @@ export const mergeWorktree = async (
       kind: "not-fast-forward",
       sourceBranch,
       targetBranch,
-      stderr: result.stderr.trim(),
+      stderr: [result.stderr.trim(), result.stdout.trim()].filter((text) => text !== "").join("\n"),
     })
   }
 

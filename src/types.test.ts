@@ -82,6 +82,19 @@ describe("toErrorMessage", () => {
     expect(toErrorMessage(error)).toContain("Rebase the worktree branch onto main")
   })
 
+  it("formats target-dirty with the blocking files and a do-not-discard hint", () => {
+    const error: WorktreeError = {
+      kind: "target-dirty",
+      path: "/repo",
+      files: ["src/lib/worktree.ts", "README.md"],
+    }
+    const message = toErrorMessage(error)
+    expect(message).toContain("uncommitted changes")
+    expect(message).toContain("src/lib/worktree.ts, README.md")
+    expect(message).toContain("another session")
+    expect(message).toContain("do not discard")
+  })
+
   it("appends git output to the not-fast-forward message when available", () => {
     const error: WorktreeError = {
       kind: "not-fast-forward",

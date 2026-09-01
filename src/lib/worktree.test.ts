@@ -57,6 +57,69 @@ describe("mergeWorktree", () => {
     expect(calls.some((c) => c.includes("checkout"))).toBe(false)
   })
 
+  it("refuses with target-dirty when uncommitted changes would be overwritten", async () => {
+    const calls: string[] = []
+    const spawn: SpawnFn = async (command) => {
+      const key = command.join(" ")
+      calls.push(key)
+      if (key === "git rev-parse --verify refs/heads/feat") return ok()
+      if (key === "git rev-parse --verify refs/heads/main") return ok()
+      if (key === "git rev-parse --abbrev-ref HEAD") return ok("main\n")
+      if (key === "git status --porcelain -uall")
+        return ok(" M src/lib/worktree.ts\n?? notes.txt\n")
+      if (key === "git diff --name-only HEAD feat") return ok("src/lib/worktree.ts\nsrc/index.ts\n")
+      return worktreeListResponse("/root/ocp-feat")
+    }
+
+    const result = await mergeWorktree(spawn, mergeInput)
+    const failure = unwrapFailure(result)
+    expect(failure.kind).toBe("target-dirty")
+    if (failure.kind === "target-dirty") {
+      expect(failure.files).toEqual(["src/lib/worktree.ts"])
+    }
+    expect(calls).not.toContain("git merge --ff-only feat")
+  })
+
+  it("merges in the working copy when dirty files do not overlap the merge", async () => {
+    const calls: string[] = []
+    const spawn: SpawnFn = async (command) => {
+      const key = command.join(" ")
+      calls.push(key)
+      if (key === "git rev-parse --verify refs/heads/feat") return ok()
+      if (key === "git rev-parse --verify refs/heads/main") return ok()
+      if (key === "git rev-parse --abbrev-ref HEAD") return ok("main\n")
+      if (key === "git status --porcelain -uall") return ok(" M README.md\n")
+      if (key === "git diff --name-only HEAD feat") return ok("src/lib/worktree.ts\n")
+      if (key === "git merge --ff-only feat") return ok()
+      return worktreeListResponse("/root/ocp-feat")
+    }
+
+    const result = await mergeWorktree(spawn, mergeInput)
+    expect(getOrThrow(result)).toBe("working-copy")
+    expect(calls).toContain("git merge --ff-only feat")
+  })
+
+  it("captures git stdout in the not-fast-forward failure when stderr is empty", async () => {
+    const spawn = mockSpawn({
+      "git worktree list --porcelain": worktreeListResponse("/root/ocp-feat"),
+      "git rev-parse --verify refs/heads/feat": ok(),
+      "git rev-parse --verify refs/heads/main": ok(),
+      "git rev-parse --abbrev-ref HEAD": ok("develop\n"),
+      "git fetch . feat:main": {
+        exitCode: 1,
+        stdout: "error: cannot lock ref 'refs/heads/main'",
+        stderr: "",
+      },
+    })
+
+    const result = await mergeWorktree(spawn, mergeInput)
+    const failure = unwrapFailure(result)
+    expect(failure.kind).toBe("not-fast-forward")
+    if (failure.kind === "not-fast-forward") {
+      expect(failure.stderr).toContain("cannot lock ref")
+    }
+  })
+
   it("updates the ref without checkout when the target is not checked out", async () => {
     const calls: string[] = []
     const spawn: SpawnFn = async (command) => {

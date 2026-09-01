@@ -37,6 +37,11 @@ export type WorktreeError =
       readonly targetBranch: string
       readonly stderr?: string
     }
+  | {
+      readonly kind: "target-dirty"
+      readonly path: string
+      readonly files: readonly string[]
+    }
   | { readonly kind: "branch-not-merged"; readonly branch: string }
   | { readonly kind: "branch-not-found"; readonly branch: string }
   | { readonly kind: "invalid-name"; readonly name: string }
@@ -97,6 +102,12 @@ export const toErrorMessage = (error: WorktreeError): string => {
       const hint = `Cannot fast-forward merge ${error.sourceBranch} into ${error.targetBranch}. Rebase the worktree branch onto ${error.targetBranch} first, then retry.`
       return error.stderr && error.stderr !== "" ? `${hint}\ngit output: ${error.stderr}` : hint
     }
+    case "target-dirty":
+      return (
+        `The main working copy at ${error.path} has uncommitted changes to files that ` +
+        `the fast-forward merge would update: ${error.files.join(", ")}. ` +
+        `Commit or stash them first — they may belong to another session, so do not discard them.`
+      )
     case "branch-not-merged":
       return `Branch ${error.branch} is not merged into the target. Refusing to delete (use -D would be required, which is not allowed).`
     case "branch-not-found":
