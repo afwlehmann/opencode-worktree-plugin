@@ -2,6 +2,10 @@ import { defineConfig } from "vite"
 import dts from "vite-plugin-dts"
 
 export default defineConfig({
+  esbuild: {
+    jsx: "automatic",
+    jsxImportSource: "@opentui/solid",
+  },
   build: {
     lib: {
       entry: {
@@ -17,6 +21,7 @@ export default defineConfig({
         "node:os",
         "@opentui/core",
         "@opentui/solid",
+        "@opentui/solid/jsx-runtime",
         "solid-js",
       ],
     },
