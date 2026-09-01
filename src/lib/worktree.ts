@@ -43,7 +43,7 @@ const worktreeExists = async (
 ): Promise<boolean> => {
   const result = await runGit(gitCmd, spawn, ["worktree", "list", "--porcelain"], repoPath)
   if (result.exitCode !== 0) return false
-  return result.stdout.split("\n").some((line) => line.startsWith(`worktree ${worktreePath}`))
+  return result.stdout.split("\n").some((line) => line === `worktree ${worktreePath}`)
 }
 
 const hasUncommittedChanges = async (
@@ -61,7 +61,7 @@ export const createWorktree = async (
 ): Promise<Either<WorktreeError, WorktreeInfo>> => {
   const { repoPath, worktreePath, sourceBranch, targetBranch, gitCmd } = input
 
-  if (await branchExists(gitCmd, spawn, repoPath, sourceBranch)) {
+  if (await branchExists(gitCmd, spawn, repoPath, `refs/heads/${sourceBranch}`)) {
     return left({ kind: "branch-exists", branch: sourceBranch })
   }
 
@@ -73,14 +73,17 @@ export const createWorktree = async (
   )
 
   if (isLeft(result)) {
-    if (result.failure.kind === "git-error" && result.failure.stderr.includes("already exists")) {
+    const failureText =
+      result.failure.kind === "git-error"
+        ? `${result.failure.stderr}\n${result.failure.message}`
+        : ""
+    if (failureText.includes("already exists")) {
       return left({ kind: "worktree-exists", path: worktreePath })
     }
     return left(result.failure)
   }
 
   return right({
-    repoShort: "",
     sourceBranch,
     targetBranch,
     path: worktreePath,
@@ -111,6 +114,33 @@ const currentBranch = async (
 ): Promise<string> => {
   const result = await runGit(gitCmd, spawn, ["rev-parse", "--abbrev-ref", "HEAD"], repoPath)
   return result.exitCode === 0 ? result.stdout.trim() : ""
+}
+
+export const resolveDefaultBranch = async (
+  gitCmd: GitCommand,
+  spawn: SpawnFn,
+  repoPath: string,
+): Promise<string> => {
+  const remoteHead = await runGit(
+    gitCmd,
+    spawn,
+    ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+    repoPath,
+  )
+  if (remoteHead.exitCode === 0) {
+    const remoteBranch = remoteHead.stdout.trim().replace(/^[^/]*\//, "")
+    if (remoteBranch !== "") return remoteBranch
+  }
+  const configured = await runGit(
+    gitCmd,
+    spawn,
+    ["config", "--get", "init.defaultBranch"],
+    repoPath,
+  )
+  if (configured.exitCode === 0 && configured.stdout.trim() !== "") {
+    return configured.stdout.trim()
+  }
+  return "main"
 }
 
 export type MergeMode = "working-copy" | "ref-only"
@@ -144,6 +174,7 @@ export const mergeWorktree = async (
       kind: "not-fast-forward",
       sourceBranch,
       targetBranch,
+      stderr: result.stderr.trim(),
     })
   }
 
@@ -170,6 +201,24 @@ export const removeWorktree = async (
   return right(undefined)
 }
 
+const branchIsCheckedOut = async (
+  gitCmd: GitCommand,
+  spawn: SpawnFn,
+  repoPath: string,
+  branch: string,
+): Promise<Either<WorktreeError, boolean>> => {
+  const result = await runGit(gitCmd, spawn, ["worktree", "list", "--porcelain"], repoPath)
+  if (result.exitCode !== 0) {
+    return left({
+      kind: "git-error",
+      command: [...gitCmd, "worktree", "list", "--porcelain"].join(" "),
+      stderr: result.stderr.trim(),
+      message: "git worktree list failed",
+    })
+  }
+  return right(result.stdout.split("\n").some((line) => line === `branch refs/heads/${branch}`))
+}
+
 export const deleteBranch = async (
   spawn: SpawnFn,
   gitCmd: GitCommand,
@@ -183,6 +232,17 @@ export const deleteBranch = async (
 
   const result = await runGit(gitCmd, spawn, ["branch", "-d", branch], repoPath)
   if (result.exitCode === 0) return right(undefined)
+
+  const checkedOut = await branchIsCheckedOut(gitCmd, spawn, repoPath, branch)
+  if (isLeft(checkedOut)) return left(checkedOut.failure)
+  if (checkedOut.success) {
+    return left({
+      kind: "git-error",
+      command: `git branch -d ${branch}`,
+      stderr: result.stderr.trim(),
+      message: `Branch ${branch} is checked out in another worktree — refusing to delete the ref. Remove that worktree first.`,
+    })
+  }
 
   const fallback = await runGit(
     gitCmd,

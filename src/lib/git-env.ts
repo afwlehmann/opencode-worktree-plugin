@@ -127,17 +127,25 @@ export const runGitOrError = async (
 }
 
 export const defaultSpawn: SpawnFn = async (command, options) => {
-  const proc = Bun.spawn([...command], {
-    cwd: options.cwd,
-    stdout: "pipe",
-    stderr: "pipe",
-  })
-  const [stdout, stderr] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-  ])
-  const exitCode = await proc.exited
-  return { exitCode, stdout, stderr }
+  try {
+    const proc = Bun.spawn([...command], {
+      cwd: options.cwd,
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const [stdout, stderr] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ])
+    const exitCode = await proc.exited
+    return { exitCode, stdout, stderr }
+  } catch (err) {
+    return {
+      exitCode: 127,
+      stdout: "",
+      stderr: `spawn failed: ${err instanceof Error ? err.message : String(err)}`,
+    }
+  }
 }
 
 export const defaultExists: PathExistsFn = async (filePath) => {

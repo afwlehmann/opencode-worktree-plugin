@@ -6,7 +6,7 @@ Git worktree management plugin for [opencode](https://opencode.ai).
 
 ## Features
 
-- **worktree_create** — creates a worktree under `${XDG_STATE_HOME:-~/.local/state}/opencode/worktrees/<repo>-<source_branch>`, creates a new branch from the target branch (default: `main`), optionally copies a gitignored `.opencode/` directory. External_directory access is allowed via the plugin's `config` hook (static allow rule for the entire worktree root).
+- **worktree_create** — creates a worktree under `${XDG_STATE_HOME:-~/.local/state}/opencode/worktrees/<repo>-<source_branch>`, creates a new branch from the target branch (default: the repository's default branch — remote HEAD, then `init.defaultBranch`, then `main`), optionally copies a gitignored `.opencode/` directory. External_directory access is allowed via the plugin's `config` hook (static allow rule for the entire worktree root).
 - **worktree_merge** — fast-forward merges the worktree branch back into the target branch — without checking out the target in the main working copy when it isn't already checked out — removes the worktree, and deletes the source branch only after verifying it is fully merged into the target.
 - **worktree_remove** — removes a worktree without merging; refuses if uncommitted changes exist. The branch is NOT deleted — use `worktree_merge` for the full merge + branch delete flow.
 - **System-prompt directive** — injects a strict MUST directive into every session via the `experimental.chat.system.transform` hook, instructing agents to use the plugin's tools instead of raw `git worktree …` commands and explaining the side effects raw git skips (permissions, `.opencode/` copy, branch-delete safety, uncommitted-changes guard, permission cleanup).

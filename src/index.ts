@@ -4,13 +4,19 @@ import { resolveOptions, isLeft } from "./types.js"
 import { createWorktreeTool } from "./tools/create-worktree.js"
 import { mergeWorktreeTool } from "./tools/merge-worktree.js"
 import { removeWorktreeTool } from "./tools/remove-worktree.js"
-import { defaultSpawn, defaultExists, ensureGitAvailable, findGitOnPath } from "./lib/git-env.js"
+import {
+  defaultSpawn,
+  defaultExists,
+  ensureGitAvailable,
+  findGitOnPath,
+  hasFlakeNix,
+} from "./lib/git-env.js"
 import { isInsideWorktreeRoot, addWorktreeRootAllow } from "./lib/permissions.js"
 import { getWorktreeRoot, resolveWorktreeRoot } from "./lib/paths.js"
 import { WORKTREE_DIRECTIVE } from "./lib/directive.js"
 import * as fs from "node:fs/promises"
 
-const serverPlugin: Plugin = async ({ client }, options) => {
+const serverPlugin: Plugin = async ({ client, directory }, options) => {
   const opts = resolveOptions(options as PluginOptions | undefined)
 
   const unresolvedRoot = getWorktreeRoot()
@@ -74,6 +80,14 @@ const serverPlugin: Plugin = async ({ client }, options) => {
 
     "shell.env": async (_input, output) => {
       if (!opts.preferNixDevelop) return
+
+      let flakePresent = false
+      try {
+        flakePresent = await hasFlakeNix(directory, defaultExists)
+      } catch {
+        flakePresent = false
+      }
+      if (!flakePresent) return
 
       const nixDir = await findGitOnPath(defaultExists)
       if (nixDir) {

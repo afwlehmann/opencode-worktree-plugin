@@ -283,7 +283,7 @@ describe.skipIf(canRun)("integration (opencode run) — skipped", () => {
     for (const key of REQUIRED_ENV) {
       if (!process.env[key]) missing.push(`${key} env var`)
     }
-    expect(missing).toEqual(missing)
+    expect(missing).toEqual([])
     console.log(`Integration tests skipped. Missing: ${missing.join(", ")}`)
   })
 })

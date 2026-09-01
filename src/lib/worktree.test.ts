@@ -5,6 +5,7 @@ import {
   mergeWorktree,
   deleteBranch,
   createWorktree,
+  resolveDefaultBranch,
 } from "./worktree.js"
 import type { Either, WorktreeError } from "../types.js"
 import { getOrThrow, isLeft } from "../types.js"
@@ -106,6 +107,32 @@ describe("mergeWorktree", () => {
     const result = await mergeWorktree(spawn, mergeInput)
     expect(unwrapFailure(result).kind).toBe("worktree-not-found")
   })
+
+  it("does not match a sibling worktree sharing the path prefix", async () => {
+    const spawn = mockSpawn({
+      "git worktree list --porcelain": ok("worktree /repo\n\nworktree /root/ocp-feat-2\n"),
+    })
+
+    const result = await mergeWorktree(spawn, mergeInput)
+    expect(unwrapFailure(result).kind).toBe("worktree-not-found")
+  })
+
+  it("propagates git stderr on a not-fast-forward failure", async () => {
+    const spawn = mockSpawn({
+      "git worktree list --porcelain": worktreeListResponse("/root/ocp-feat"),
+      "git rev-parse --verify refs/heads/feat": ok(),
+      "git rev-parse --verify refs/heads/main": ok(),
+      "git rev-parse --abbrev-ref HEAD": ok("develop\n"),
+      "git fetch . feat:main": fail("! [rejected] (non-fast-forward)"),
+    })
+
+    const result = await mergeWorktree(spawn, mergeInput)
+    const failure = unwrapFailure(result)
+    expect(failure.kind).toBe("not-fast-forward")
+    if (failure.kind === "not-fast-forward") {
+      expect(failure.stderr).toContain("non-fast-forward")
+    }
+  })
 })
 
 describe("deleteBranch", () => {
@@ -125,7 +152,7 @@ describe("deleteBranch", () => {
     expect(calls).not.toContain("git update-ref -d refs/heads/feat")
   })
 
-  it("falls back to git update-ref -d when -d refuses for a non-checked-out target", async () => {
+  it("falls back to git update-ref -d when -d refuses and the branch is not checked out", async () => {
     const calls: string[] = []
     const spawn: SpawnFn = async (command) => {
       const key = command.join(" ")
@@ -134,6 +161,9 @@ describe("deleteBranch", () => {
       if (key === "git branch -d feat") {
         return fail("error: the branch 'feat' is not fully merged")
       }
+      if (key === "git worktree list --porcelain") {
+        return ok("worktree /repo\n\nbranch refs/heads/main\n")
+      }
       if (key === "git update-ref -d refs/heads/feat") return ok()
       return fail(`not mocked: ${key}`)
     }
@@ -141,6 +171,45 @@ describe("deleteBranch", () => {
     const result = await deleteBranch(spawn, ["git"], "/repo", "feat", "integration")
     expect(isLeft(result)).toBe(false)
     expect(calls).toContain("git update-ref -d refs/heads/feat")
+  })
+
+  it("refuses to delete a branch that is checked out in another worktree", async () => {
+    const calls: string[] = []
+    const spawn: SpawnFn = async (command) => {
+      const key = command.join(" ")
+      calls.push(key)
+      if (key === "git merge-base --is-ancestor feat main") return ok()
+      if (key === "git branch -d feat")
+        return fail("error: Cannot delete branch 'feat' checked out at '/root/ocp-feat'")
+      if (key === "git worktree list --porcelain") {
+        return ok("worktree /repo\n\nworktree /root/ocp-feat\n\nbranch refs/heads/feat\n")
+      }
+      return fail(`not mocked: ${key}`)
+    }
+
+    const result = await deleteBranch(spawn, ["git"], "/repo", "feat", "main")
+    const failure = unwrapFailure(result)
+    expect(failure.kind).toBe("git-error")
+    if (failure.kind === "git-error") {
+      expect(failure.message).toContain("checked out in another worktree")
+    }
+    expect(calls).not.toContain("git update-ref -d refs/heads/feat")
+  })
+
+  it("refuses the force-delete fallback when the worktree list cannot be read", async () => {
+    const calls: string[] = []
+    const spawn: SpawnFn = async (command) => {
+      const key = command.join(" ")
+      calls.push(key)
+      if (key === "git merge-base --is-ancestor feat main") return ok()
+      if (key === "git branch -d feat") return fail("error: the branch 'feat' is not fully merged")
+      if (key === "git worktree list --porcelain") return fail("fatal: not a git repository")
+      return fail(`not mocked: ${key}`)
+    }
+
+    const result = await deleteBranch(spawn, ["git"], "/repo", "feat", "main")
+    expect(unwrapFailure(result).kind).toBe("git-error")
+    expect(calls).not.toContain("git update-ref -d refs/heads/feat")
   })
 
   it("refuses to delete a branch that is not merged into the target", async () => {
@@ -156,7 +225,7 @@ describe("deleteBranch", () => {
 describe("createWorktree", () => {
   it("refuses to create a worktree when the branch already exists", async () => {
     const spawn = mockSpawn({
-      "git rev-parse --verify feat": ok(),
+      "git rev-parse --verify refs/heads/feat": ok(),
     })
 
     const result = await createWorktree(spawn, {
@@ -167,5 +236,60 @@ describe("createWorktree", () => {
       gitCmd: ["git"],
     })
     expect(unwrapFailure(result).kind).toBe("branch-exists")
+  })
+
+  it("does not treat a tag name collision as an existing branch", async () => {
+    const spawn = mockSpawn({
+      "git rev-parse --verify refs/heads/feat": fail("fatal: Needed a single revision"),
+      "git worktree add -b feat /root/ocp-feat main": ok(),
+    })
+
+    const result = await createWorktree(spawn, {
+      repoPath: "/repo",
+      worktreePath: "/root/ocp-feat",
+      sourceBranch: "feat",
+      targetBranch: "main",
+      gitCmd: ["git"],
+    })
+    expect(getOrThrow(result)).toEqual({
+      sourceBranch: "feat",
+      targetBranch: "main",
+      path: "/root/ocp-feat",
+      repoPath: "/repo",
+    })
+  })
+})
+
+describe("resolveDefaultBranch", () => {
+  it("uses the remote HEAD short name", async () => {
+    const spawn = mockSpawn({
+      "git symbolic-ref --short refs/remotes/origin/HEAD": ok("origin/main\n"),
+    })
+    expect(await resolveDefaultBranch(["git"], spawn, "/repo")).toBe("main")
+  })
+
+  it("strips only the remote name from namespaced remote branches", async () => {
+    const spawn = mockSpawn({
+      "git symbolic-ref --short refs/remotes/origin/HEAD": ok("origin/release/1.2\n"),
+    })
+    expect(await resolveDefaultBranch(["git"], spawn, "/repo")).toBe("release/1.2")
+  })
+
+  it("falls back to init.defaultBranch when no remote HEAD exists", async () => {
+    const spawn = mockSpawn({
+      "git symbolic-ref --short refs/remotes/origin/HEAD": fail(
+        "fatal: refs/remotes/origin/HEAD is not a valid ref",
+      ),
+      "git config --get init.defaultBranch": ok("master\n"),
+    })
+    expect(await resolveDefaultBranch(["git"], spawn, "/repo")).toBe("master")
+  })
+
+  it("falls back to main when nothing is configured", async () => {
+    const spawn = mockSpawn({
+      "git symbolic-ref --short refs/remotes/origin/HEAD": fail(),
+      "git config --get init.defaultBranch": fail(),
+    })
+    expect(await resolveDefaultBranch(["git"], spawn, "/repo")).toBe("main")
   })
 })

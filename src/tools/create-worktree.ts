@@ -10,7 +10,7 @@ import {
   hasFlakeNix,
   resolveGitCommand,
 } from "../lib/git-env.js"
-import { createWorktree as createWt, listWorktrees } from "../lib/worktree.js"
+import { createWorktree as createWt, listWorktrees, resolveDefaultBranch } from "../lib/worktree.js"
 import { detectOpencodeDir, shouldPromptForCopy, copyOpencodeDir } from "../lib/opencode-dir.js"
 import { createLogger } from "../lib/logger.js"
 import { toErrorMessage, type WorktreeError, isLeft, isRight } from "../types.js"
@@ -81,13 +81,13 @@ export const createWorktreeTool = (deps: CreateWorktreeDeps) =>
         .string()
         .optional()
         .describe(
-          "Existing branch to branch off from (default: main). The new " +
-            "source_branch is created from this branch. For worktree_merge, " +
+          "Existing branch to branch off from. Defaults to the repository's " +
+            "default branch (remote HEAD, then init.defaultBranch, then main). " +
+            "The new source_branch is created from this branch. For worktree_merge, " +
             "this is the branch the source_branch is merged back into.",
         ),
     },
     async execute(args, context) {
-      const targetBranch = args.target_branch ?? "main"
       const log = createLogger(deps.client, "opencode-worktree-plugin")
 
       if (!isValidWorktreeName(args.repo_short) || !isValidWorktreeName(args.source_branch)) {
@@ -103,10 +103,6 @@ export const createWorktreeTool = (deps: CreateWorktreeDeps) =>
       )
 
       context.metadata({ title: `Creating worktree ${args.repo_short}-${args.source_branch}` })
-      await log.log(
-        "info",
-        `worktree_create: repo_short=${args.repo_short} source_branch=${args.source_branch} target_branch=${targetBranch} worktree_path=${worktreePath}`,
-      )
 
       await ensureWorktreeRoot(deps.mkdir)
 
@@ -123,7 +119,12 @@ export const createWorktreeTool = (deps: CreateWorktreeDeps) =>
 
       const flakePresent = await hasFlakeNix(repoPath, deps.exists)
       const resolvedGitCmd: GitCommand = resolveGitCommand(deps.options, flakePresent)
-      await log.log("info", `worktree_create: git command resolved: ${resolvedGitCmd.join(" ")}`)
+      const targetBranch =
+        args.target_branch ?? (await resolveDefaultBranch(resolvedGitCmd, deps.spawn, repoPath))
+      await log.log(
+        "info",
+        `worktree_create: repo_short=${args.repo_short} source_branch=${args.source_branch} target_branch=${targetBranch} worktree_path=${worktreePath} git=${resolvedGitCmd.join(" ")}`,
+      )
 
       const createResult = await createWt(deps.spawn, {
         repoPath,
@@ -166,7 +167,15 @@ export const createWorktreeTool = (deps: CreateWorktreeDeps) =>
               "warn",
               `worktree_create: .opencode/ copy failed: ${toErrorMessage(copyResult.failure)}`,
             )
-            return formatError(copyResult.failure)
+            return {
+              title: "Worktree created (.opencode/ copy failed)",
+              output:
+                `Worktree created at ${worktreePath} on branch ${args.source_branch} ` +
+                `(from ${targetBranch}), but the .opencode/ copy failed:\n\n` +
+                `${toErrorMessage(copyResult.failure)}\n\n` +
+                `The worktree is usable without it. Use this path for working in ` +
+                `the worktree: ${worktreePath}`,
+            }
           }
           await log.log("info", `worktree_create: .opencode/ directory copied to ${worktreePath}`)
         } catch {

@@ -7,16 +7,23 @@ export type StdinSpawn = (
 ) => Promise<{ readonly exitCode: number; readonly stderr: string }>
 
 export const bunStdinSpawn: StdinSpawn = async (command, input) => {
-  const proc = Bun.spawn([...command], {
-    stdin: "pipe",
-    stdout: "ignore",
-    stderr: "pipe",
-  })
-  proc.stdin.write(input)
-  proc.stdin.end()
-  const stderr = await new Response(proc.stderr).text()
-  const exitCode = await proc.exited
-  return { exitCode, stderr }
+  try {
+    const proc = Bun.spawn([...command], {
+      stdin: "pipe",
+      stdout: "ignore",
+      stderr: "pipe",
+    })
+    proc.stdin.write(input)
+    proc.stdin.end()
+    const stderr = await new Response(proc.stderr).text()
+    const exitCode = await proc.exited
+    return { exitCode, stderr }
+  } catch (err) {
+    return {
+      exitCode: 127,
+      stderr: `spawn failed: ${err instanceof Error ? err.message : String(err)}`,
+    }
+  }
 }
 
 const CLIPBOARD_COMMANDS: Readonly<Record<string, readonly (readonly string[])[]>> = {
@@ -26,6 +33,21 @@ const CLIPBOARD_COMMANDS: Readonly<Record<string, readonly (readonly string[])[]
 }
 
 type Attempt = { readonly command: readonly string[]; readonly stderr: string }
+
+const runSpawn = async (
+  spawn: StdinSpawn,
+  command: readonly string[],
+  text: string,
+): Promise<{ readonly exitCode: number; readonly stderr: string }> => {
+  try {
+    return await spawn(command, text)
+  } catch (err) {
+    return {
+      exitCode: 127,
+      stderr: `spawn failed: ${err instanceof Error ? err.message : String(err)}`,
+    }
+  }
+}
 
 const tryCommands = async (
   text: string,
@@ -44,7 +66,7 @@ const tryCommands = async (
         .join("; "),
     })
   }
-  const result = await spawn(command, text)
+  const result = await runSpawn(spawn, command, text)
   const attempts: readonly Attempt[] = [...attempted, { command, stderr: result.stderr.trim() }]
   if (result.exitCode === 0) return right(undefined)
   return tryCommands(text, spawn, remaining.slice(1), attempts)

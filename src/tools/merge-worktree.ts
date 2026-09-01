@@ -13,6 +13,7 @@ import {
   mergeWorktree as mergeWt,
   removeWorktree as removeWt,
   deleteBranch,
+  resolveDefaultBranch,
 } from "../lib/worktree.js"
 import { createLogger } from "../lib/logger.js"
 import { toErrorMessage, type WorktreeError, isLeft, getOrThrow } from "../types.js"
@@ -62,13 +63,14 @@ export const mergeWorktreeTool = (deps: MergeWorktreeDeps) =>
         .string()
         .optional()
         .describe(
-          "Target branch to merge into (default: main). The source_branch " +
-            "is fast-forward-merged into this branch. If a fast-forward is not " +
-            "possible, rebase the source_branch onto this target first, then retry.",
+          "Target branch to merge into. Defaults to the repository's default " +
+            "branch (remote HEAD, then init.defaultBranch, then main). The " +
+            "source_branch is fast-forward-merged into this branch. If a " +
+            "fast-forward is not possible, rebase the source_branch onto this " +
+            "target first, then retry.",
         ),
     },
     async execute(args, context) {
-      const targetBranch = args.target_branch ?? "main"
       const log = createLogger(deps.client, "opencode-worktree-plugin")
 
       if (!isValidWorktreeName(args.repo_short) || !isValidWorktreeName(args.source_branch)) {
@@ -83,11 +85,7 @@ export const mergeWorktreeTool = (deps: MergeWorktreeDeps) =>
         args.source_branch,
       )
 
-      context.metadata({ title: `Merging ${args.source_branch} into ${targetBranch}` })
-      await log.log(
-        "info",
-        `worktree_merge: repo_short=${args.repo_short} source_branch=${args.source_branch} target_branch=${targetBranch} worktree_path=${worktreePath}`,
-      )
+      context.metadata({ title: `Merging ${args.source_branch}` })
 
       const gitResult = await ensureGitAvailable(deps.options, deps.exists, deps.spawn)
       if (isLeft(gitResult)) {
@@ -101,7 +99,12 @@ export const mergeWorktreeTool = (deps: MergeWorktreeDeps) =>
       const repoPath = context.directory
       const flakePresent = await hasFlakeNix(repoPath, deps.exists)
       const gitCmd = resolveGitCommand(deps.options, flakePresent)
-      await log.log("info", `worktree_merge: git command resolved: ${gitCmd.join(" ")}`)
+      const targetBranch =
+        args.target_branch ?? (await resolveDefaultBranch(gitCmd, deps.spawn, repoPath))
+      await log.log(
+        "info",
+        `worktree_merge: repo_short=${args.repo_short} source_branch=${args.source_branch} target_branch=${targetBranch} worktree_path=${worktreePath} git=${gitCmd.join(" ")}`,
+      )
 
       const mergeResult = await mergeWt(deps.spawn, {
         repoPath,
@@ -159,8 +162,12 @@ export const mergeWorktreeTool = (deps: MergeWorktreeDeps) =>
           output:
             `Branch ${args.source_branch} was merged into ${targetBranch} successfully, ` +
             `but the worktree could not be removed:\n\n${toErrorMessage(removeResult.failure)}\n\n` +
-            `The merge is complete. You may need to manually run:\n` +
-            `  ${gitCmd.join(" ")} worktree remove --force ${worktreePath}`,
+            `The merge is complete. If the worktree has uncommitted or untracked ` +
+            `changes you want to keep, commit or stash them in ${worktreePath}. ` +
+            `Uncommitted changes were NOT part of the merge. Once clean, call ` +
+            `worktree_remove with repo_short='${args.repo_short}' and ` +
+            `source_branch='${args.source_branch}' to remove it (the branch is ` +
+            `already merged and will not be deleted by worktree_remove).`,
         }
       }
 

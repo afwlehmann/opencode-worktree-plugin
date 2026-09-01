@@ -71,3 +71,32 @@ describe("copyToClipboard", () => {
     expect(calls).toEqual([])
   })
 })
+
+describe("copyToClipboard (spawn failures)", () => {
+  it("treats a throwing spawn as a failed attempt and falls through", async () => {
+    const calls: Call[] = []
+    const spawn = async (command: readonly string[], input: string) => {
+      calls.push({ command, input })
+      if (command.join(" ") === "wl-copy") throw new Error("boom")
+      return { exitCode: 0, stderr: "" }
+    }
+    const result = await copyToClipboard("/tmp/repo", spawn, "linux")
+    expect(isRight(result)).toBe(true)
+    expect(calls.map((call) => call.command.join(" "))).toEqual([
+      "wl-copy",
+      "xclip -selection clipboard",
+    ])
+  })
+
+  it("fails with the error text when every candidate throws", async () => {
+    const spawn = async () => {
+      throw new Error("no clipboard runtime")
+    }
+    const result = await copyToClipboard("/tmp/repo", spawn, "darwin")
+    expect(isLeft(result)).toBe(true)
+    if (isLeft(result) && result.failure.kind === "clipboard-unavailable") {
+      expect(result.failure.stderr).toContain("spawn failed")
+      expect(result.failure.stderr).toContain("no clipboard runtime")
+    }
+  })
+})

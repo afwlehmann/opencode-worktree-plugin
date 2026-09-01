@@ -13,7 +13,6 @@ export const resolveOptions = (options?: PluginOptions): ResolvedOptions => ({
 })
 
 export type WorktreeInfo = {
-  readonly repoShort: string
   readonly sourceBranch: string
   readonly targetBranch: string
   readonly path: string
@@ -36,6 +35,7 @@ export type WorktreeError =
       readonly kind: "not-fast-forward"
       readonly sourceBranch: string
       readonly targetBranch: string
+      readonly stderr?: string
     }
   | { readonly kind: "branch-not-merged"; readonly branch: string }
   | { readonly kind: "branch-not-found"; readonly branch: string }
@@ -93,8 +93,10 @@ export const toErrorMessage = (error: WorktreeError): string => {
       return `Worktree not found at ${error.path}`
     case "branch-exists":
       return `Branch already exists: ${error.branch}`
-    case "not-fast-forward":
-      return `Cannot fast-forward merge ${error.sourceBranch} into ${error.targetBranch}. Rebase the worktree branch onto ${error.targetBranch} first, then retry.`
+    case "not-fast-forward": {
+      const hint = `Cannot fast-forward merge ${error.sourceBranch} into ${error.targetBranch}. Rebase the worktree branch onto ${error.targetBranch} first, then retry.`
+      return error.stderr && error.stderr !== "" ? `${hint}\ngit output: ${error.stderr}` : hint
+    }
     case "branch-not-merged":
       return `Branch ${error.branch} is not merged into the target. Refusing to delete (use -D would be required, which is not allowed).`
     case "branch-not-found":

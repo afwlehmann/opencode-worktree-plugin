@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest"
 import {
   type SpawnFn,
   type SpawnResult,
+  defaultSpawn,
   hasFlakeNix,
   resolveGitCommand,
   type GitEnvOptions,
@@ -76,5 +77,14 @@ describe("git-env", () => {
       ).ensureGitAvailable({ preferNixDevelop: false }, exists, spawn)
       expect(result._tag).toBe("Failure")
     })
+  })
+})
+
+describe("defaultSpawn", () => {
+  it("returns a failed result instead of throwing when the process cannot start", async () => {
+    const result = await defaultSpawn(["definitely-not-a-command"], { cwd: "/does/not/exist" })
+
+    expect(result.exitCode).not.toBe(0)
+    expect(result.stderr).toContain("spawn failed")
   })
 })

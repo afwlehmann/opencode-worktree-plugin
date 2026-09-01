@@ -28,12 +28,12 @@ Two entry points (SDK enforces `server?: never` / `tui?: never`):
 
 - `src/lib/paths.ts` — XDG state dir resolution (`${XDG_STATE_HOME:-~/.local/state}/opencode/worktrees/<repo>-<branch>`)
 - `src/lib/git-env.ts` — git command resolution (`git` vs `nix develop -c git`), PATH enforcement, flake detection
-- `src/lib/worktree.ts` — pure git operations (create, FF-only merge, remove, branch delete after verified merge into target)
+- `src/lib/worktree.ts` — pure git operations (create, FF-only merge, remove, default-branch resolution, branch delete after verified merge into target; the `update-ref -d` fallback is guarded by a checked-out-in-any-worktree check and never force-deletes a checked-out branch)
 - `src/lib/permissions.ts` — `external_directory` permission management: static `config`-hook allow for the worktree root (`addWorktreeRootAllow`) and the boundary-safe root check the `permission.ask` backstop uses (`isInsideWorktreeRoot`)
 - `src/lib/opencode-dir.ts` — gitignored `.opencode/` detection and copy
 - `src/lib/directive.ts` — system-prompt directive injected via `experimental.chat.system.transform`
 - `src/lib/logger.ts` — `createLogger` helper: wraps `client.app.log` for structured info/warn/error logging from tools
-- `src/lib/active-worktree.ts` — pure extraction/fold of the session's `worktree_*` tool-call parts into the currently active worktrees; branch comes from the tool call (live `vcs.branch` belongs to the session's cwd, not the worktree)
+- `src/lib/active-worktree.ts` — pure extraction/fold of the session's `worktree_*` tool-call parts into the currently active worktree names; branch display is derived in `status-label.ts` from the worktree name's last dash-segment or the session's live `vcs` state (which belongs to the session's cwd, not the worktree)
 - `src/lib/status-label.ts` — `app_bottom` label formatting: the latest active worktree name with a total count (`config-fix (3)`); the branch is only appended when the live branch diverges from the worktree name's last dash-segment (fallback `<directory>:<branch>` outside tracked worktrees). Clicking the label opens a `DialogSelect` via `api.ui.dialog.replace` listing all active worktrees with their absolute paths; selecting an option copies the path to the clipboard (`src/lib/clipboard.ts`: `pbcopy` on darwin, `wl-copy`/`xclip`/`xsel` on linux) and confirms via a success toast (warning toast on failure).
 - `src/lib/clipboard.ts` — clipboard copy via platform stdin commands, returning `Either<WorktreeError, void>` with `clipboard-unavailable` after all candidates fail.
 - `src/tools/` — tool definitions with Zod args (all three tools share `repo_short` + `source_branch` arg names for consistency)
@@ -41,9 +41,10 @@ Two entry points (SDK enforces `server?: never` / `tui?: never`):
 
 ## Conventions
 
-- **Functional style**: `const` only, no imperative loops, no exceptions for control flow. Fallible functions return `Either<Error, T>`.
+- **Functional style**: `const` only, no imperative loops, no exceptions for control flow. Fallible functions return `Either<Error, T>`. The only sanctioned `try/catch` is at the impure boundary (`defaultSpawn`, `bunStdinSpawn`, injected spawns in `clipboard`'s `tryCommands`, and the logger): thrown errors from the outside world are converted into values there, never allowed to escape into pure code.
 - **Error handling**: `Either<WorktreeError, T>` from `src/types.ts`. Use `isLeft`/`isRight`/`flatMap`/`map`.
-- **Git safety**: fast-forward only (`--ff-only`), branch delete only after verified merge into target (`git branch -d` with `git update-ref -d` fallback for non-checked-out targets), refuse uncommitted changes on remove, `worktree_merge` never checks out another branch in the main working copy.
+- **Spawn boundary**: all default spawns return `{ exitCode: 127, stderr: "spawn failed: ..." }` instead of throwing when a process cannot start (missing cwd/binary). Pure functions take `spawn`/`exists`/`realpath` as injected parameters and never touch `process` or the filesystem directly.
+- **Git safety**: fast-forward only (`--ff-only`), branch delete only after verified merge into target (`git branch -d` with `git update-ref -d` fallback that is refused when the branch is checked out in any worktree or the worktree list cannot be read), refuse uncommitted changes on remove, `worktree_merge` never checks out another branch in the main working copy, and tool guidance never suggests destructive manual git (`--force`).
 - **Name validation**: `repo_short` and `source_branch` must match `^[a-z0-9][a-z0-9-]*$` (prevents path traversal and repo/branch name collisions). Worktree paths are symlink-resolved to match git's porcelain output.
 - **Tool descriptions**: agents MUST use the plugin tools instead of raw git worktree commands. Descriptions explicitly say "You MUST use this tool" and "Do NOT run `git worktree add/remove`/`git merge`/`git branch -d` manually".
 - **Logging**: tools log all interesting operations at info level via `createLogger` (`src/lib/logger.ts`), warnings for recoverable failures, errors for git-unavailable. Operations are infrequent so info-level logging won't spam.
@@ -54,4 +55,4 @@ Two entry points (SDK enforces `server?: never` / `tui?: never`):
 
 ## TUI typecheck note
 
-`tsc --noEmit` excludes `src/tui.tsx` due to a `solid-js` vs `@opentui/solid` JSX namespace conflict. The TUI file is typechecked by Vite at build time.
+`tsc --noEmit` excludes `src/tui.tsx` due to a `solid-js` vs `@opentui/solid` JSX namespace conflict. The TUI file is typechecked by Vite at build time. Because the dts build cannot emit declarations for it, the package's `./tui` export resolves its `types` field to the hand-written `types/tui.d.ts`.

@@ -18,23 +18,32 @@ export const getWorktreePath = (repoShort: string, branch: string): string =>
   path.join(getWorktreeRoot(), `${repoShort}-${branch}`)
 
 type PathExistsFn = (path: string) => Promise<boolean>
+type RealpathFn = (path: string) => Promise<string>
 
-const realpathAncestor = async (dir: string, exists: PathExistsFn): Promise<string> => {
+const defaultRealpath: RealpathFn = (path) => fs.realpath(path)
+
+const realpathAncestor = async (
+  dir: string,
+  exists: PathExistsFn,
+  realpath: RealpathFn = defaultRealpath,
+): Promise<string> => {
   if (await exists(dir)) {
     try {
-      return await fs.realpath(dir)
+      return await realpath(dir)
     } catch {
       return dir
     }
   }
   const parent = path.dirname(dir)
   if (parent === dir) return dir
-  const resolvedParent = await realpathAncestor(parent, exists)
+  const resolvedParent = await realpathAncestor(parent, exists, realpath)
   return path.join(resolvedParent, path.basename(dir))
 }
 
-export const resolveWorktreeRoot = async (exists: PathExistsFn): Promise<WorktreeRoot> =>
-  realpathAncestor(getWorktreeRoot(), exists)
+export const resolveWorktreeRoot = async (
+  exists: PathExistsFn,
+  realpath?: RealpathFn,
+): Promise<WorktreeRoot> => realpathAncestor(getWorktreeRoot(), exists, realpath)
 
 export const resolveWorktreePath = async (
   exists: PathExistsFn,

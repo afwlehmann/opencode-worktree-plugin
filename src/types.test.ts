@@ -75,12 +75,23 @@ describe("toErrorMessage", () => {
   it("formats not-fast-forward with rebase hint", () => {
     const error: WorktreeError = {
       kind: "not-fast-forward",
-      sourceBranch: "feature",
+      sourceBranch: "feat",
       targetBranch: "main",
     }
-    expect(toErrorMessage(error)).toContain("feature")
-    expect(toErrorMessage(error)).toContain("main")
-    expect(toErrorMessage(error)).toContain("Rebase")
+    expect(toErrorMessage(error)).toContain("Cannot fast-forward merge feat into main")
+    expect(toErrorMessage(error)).toContain("Rebase the worktree branch onto main")
+  })
+
+  it("appends git output to the not-fast-forward message when available", () => {
+    const error: WorktreeError = {
+      kind: "not-fast-forward",
+      sourceBranch: "feat",
+      targetBranch: "main",
+      stderr: "refusing to fetch into branch 'main' checked out at '/repo'",
+    }
+    expect(toErrorMessage(error)).toContain(
+      "git output: refusing to fetch into branch 'main' checked out at '/repo'",
+    )
   })
 
   it("formats git-not-found", () => {

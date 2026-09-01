@@ -106,5 +106,20 @@ describe("paths", () => {
         else process.env["XDG_STATE_HOME"] = original
       }
     })
+
+    it("uses the injected realpath for resolution", async () => {
+      const original = process.env["XDG_STATE_HOME"]
+      process.env["XDG_STATE_HOME"] = "/fake/state"
+      try {
+        const resolved = await resolveWorktreeRoot(
+          async () => true,
+          async (dir: string) => `/resolved${dir}`,
+        )
+        expect(resolved).toBe("/resolved/fake/state/opencode/worktrees")
+      } finally {
+        if (original === undefined) delete process.env["XDG_STATE_HOME"]
+        else process.env["XDG_STATE_HOME"] = original
+      }
+    })
   })
 })
