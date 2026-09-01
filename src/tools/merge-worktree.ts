@@ -25,21 +25,35 @@ export type MergeWorktreeDeps = {
   readonly client: OpencodeClient
 }
 
-export const mergeWorktreeTool = (deps: MergeWorktreeDeps) =>
-  tool({
+export const mergeWorktreeTool = (deps: MergeWorktreeDeps) => {
+  const strategyNote =
+    deps.options.mergeStrategy === "ff-only"
+      ? "Merges using fast-forward only — if the branches have diverged, the merge " +
+        "fails and the worktree branch must be rebased onto the target first."
+      : "Merges following this repository's merge.ff configuration — fast-forward " +
+        "when possible, a merge commit otherwise (merge.ff=only requires a rebase " +
+        "first, merge.ff=false always creates a merge commit). Conflicted merges " +
+        "are rolled back."
+  const targetNote =
+    deps.options.mergeStrategy === "ff-only"
+      ? "If the merge cannot fast-forward, rebase the worktree branch onto the " +
+        "target first, then retry."
+      : "If a fast-forward is required (merge.ff=only) but not possible, or the " +
+        "merge conflicts, rebase the worktree branch onto the target and retry."
+  return tool({
     description:
-      "You MUST use this tool instead of raw `git merge --ff-only` + " +
-      "`git worktree remove` + `git branch -d`. Merges a worktree's branch into " +
-      "the target branch using fast-forward merge only — without checking out " +
-      "the target branch in the main working copy when it is not already " +
-      "checked out (no surprise branch switches). On success: the worktree " +
-      "is removed and the source branch is deleted only after verifying it is " +
-      "fully merged into the target. Do NOT run `git merge`, `git worktree " +
-      "remove`, or `git branch -d` manually for worktree branches — this tool " +
-      "enforces the fast-forward-only and branch-delete safety rules that raw " +
-      "git skips. If the merge cannot fast-forward, rebase the worktree branch " +
-      "onto the target first, then retry. Workflow: call worktree_create first, " +
-      "then this to fold changes back.",
+      "You MUST use this tool instead of raw `git merge` + `git worktree remove` + " +
+      "`git branch -d`. " +
+      strategyNote +
+      " The target branch is never checked out in the main working copy when it " +
+      "is not already checked out (no surprise branch switches) — off-target " +
+      "merges update the branch ref directly without touching any working copy. " +
+      "On success: the worktree is removed and the source branch is deleted only " +
+      "after verifying it is fully merged into the target. Do NOT run `git " +
+      "merge`, `git worktree remove`, or `git branch -d` manually for worktree " +
+      "branches — this tool enforces the merge-safety and branch-delete rules " +
+      "that raw git skips. Workflow: call worktree_create first, then this to " +
+      "fold changes back.",
     args: {
       repo_short: tool.schema
         .string()
@@ -65,9 +79,9 @@ export const mergeWorktreeTool = (deps: MergeWorktreeDeps) =>
         .describe(
           "Target branch to merge into. Defaults to the repository's default " +
             "branch (remote HEAD, then init.defaultBranch, then main). The " +
-            "source_branch is fast-forward-merged into this branch. If a " +
-            "fast-forward is not possible, rebase the source_branch onto this " +
-            "target first, then retry.",
+            "source_branch is merged into this branch following the configured " +
+            "merge strategy. " +
+            targetNote,
         ),
     },
     async execute(args, context) {
@@ -111,34 +125,39 @@ export const mergeWorktreeTool = (deps: MergeWorktreeDeps) =>
         worktreePath,
         sourceBranch: args.source_branch,
         targetBranch,
+        mergeStrategy: deps.options.mergeStrategy,
         gitCmd,
       })
 
       if (isLeft(mergeResult)) {
-        if (mergeResult.failure.kind === "target-dirty") {
+        const failure = mergeResult.failure
+        if (failure.kind === "target-dirty") {
           await log.log(
             "warn",
-            `worktree_merge: main working copy dirty: ${toErrorMessage(mergeResult.failure)}`,
+            `worktree_merge: main working copy dirty: ${toErrorMessage(failure)}`,
           )
           return {
             title: "Merge refused — uncommitted changes in the main working copy",
             output:
-              toErrorMessage(mergeResult.failure) +
+              toErrorMessage(failure) +
               "\n\nThe merge was NOT attempted. Do NOT rebase the worktree branch — the " +
               "source branch is fine; only the main working copy is blocked. If another " +
               "session owns those changes, wait for it to commit them, or ask the user " +
               "to stash them.",
           }
         }
-        if (mergeResult.failure.kind === "not-fast-forward") {
+        if (failure.kind === "not-fast-forward" || failure.kind === "merge-conflict") {
           await log.log(
             "warn",
-            `worktree_merge: not fast-forward: ${args.source_branch} → ${targetBranch}`,
+            `worktree_merge: ${failure.kind}: ${args.source_branch} → ${targetBranch}`,
           )
           return {
-            title: "Merge failed — not fast-forward",
+            title:
+              failure.kind === "merge-conflict"
+                ? "Merge failed — conflicts"
+                : "Merge failed — not fast-forward",
             output:
-              toErrorMessage(mergeResult.failure) +
+              toErrorMessage(failure) +
               "\n\nTo fix this:\n" +
               `  1. cd ${worktreePath}\n` +
               `  2. ${gitCmd.join(" ")} rebase ${targetBranch}\n` +
@@ -148,17 +167,14 @@ export const mergeWorktreeTool = (deps: MergeWorktreeDeps) =>
               `  ${gitCmd.join(" ")} rebase ${targetBranch} ${args.source_branch}`,
           }
         }
-        await log.log(
-          "warn",
-          `worktree_merge: merge failed: ${toErrorMessage(mergeResult.failure)}`,
-        )
-        return formatError(mergeResult.failure)
+        await log.log("warn", `worktree_merge: merge failed: ${toErrorMessage(failure)}`)
+        return formatError(failure)
       }
 
-      const mergeMode = getOrThrow(mergeResult)
+      const { mode: mergeMode, style: mergeStyle } = getOrThrow(mergeResult)
       await log.log(
         "info",
-        `worktree_merge: ${args.source_branch} fast-forward merged into ${targetBranch} (mode: ${mergeMode})`,
+        `worktree_merge: ${args.source_branch} ${mergeStyle === "fast-forward" ? "fast-forward merged" : "merged (merge commit)"} into ${targetBranch} (mode: ${mergeMode})`,
       )
 
       const removeResult = await removeWt(deps.spawn, {
@@ -218,13 +234,14 @@ export const mergeWorktreeTool = (deps: MergeWorktreeDeps) =>
         title: `Merged: ${args.source_branch} → ${targetBranch}`,
         output:
           `Merge completed successfully.\n\n` +
-          `  Merged:      ${args.source_branch} → ${targetBranch} (fast-forward, ` +
+          `  Merged:      ${args.source_branch} → ${targetBranch} (${mergeStyle}, ` +
           `${mergeMode === "ref-only" ? "target ref updated — main working copy untouched" : "main working copy updated"})\n` +
           `  Worktree:    ${worktreePath} — removed\n` +
           `  Branch:      ${args.source_branch} — deleted\n`,
       }
     },
   })
+}
 
 const formatError = (error: WorktreeError): { title: string; output: string } => ({
   title: `Worktree error: ${error.kind}`,

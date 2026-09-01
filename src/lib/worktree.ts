@@ -1,4 +1,4 @@
-import type { Either, WorktreeError, WorktreeInfo } from "../types.js"
+import type { Either, MergeStrategy, WorktreeError, WorktreeInfo } from "../types.js"
 import { isLeft, left, right } from "../types.js"
 import type { GitCommand, SpawnFn, SpawnResult } from "./git-env.js"
 import { runGit, runGitOrError } from "./git-env.js"
@@ -16,6 +16,7 @@ export type MergeWorktreeInput = {
   readonly worktreePath: string
   readonly sourceBranch: string
   readonly targetBranch: string
+  readonly mergeStrategy: MergeStrategy
   readonly gitCmd: GitCommand
 }
 
@@ -145,6 +146,18 @@ export const resolveDefaultBranch = async (
 
 export type MergeMode = "working-copy" | "ref-only"
 
+export type MergeStyle = "fast-forward" | "merge-commit"
+
+export type MergeResult = {
+  readonly mode: MergeMode
+  readonly style: MergeStyle
+}
+
+type MergeFfConfig = "default" | "no-ff" | "ff-only"
+
+const combinedOutput = (result: SpawnResult): string =>
+  [result.stderr.trim(), result.stdout.trim()].filter((text) => text !== "").join("\n")
+
 const statusPaths = async (
   gitCmd: GitCommand,
   spawn: SpawnFn,
@@ -174,11 +187,200 @@ const pathsChangedByMerge = async (
   return result.stdout.split("\n").filter((line) => line !== "")
 }
 
+const readMergeFfConfig = async (
+  gitCmd: GitCommand,
+  spawn: SpawnFn,
+  repoPath: string,
+): Promise<MergeFfConfig> => {
+  const result = await runGit(gitCmd, spawn, ["config", "--get", "merge.ff"], repoPath)
+  if (result.exitCode !== 0) return "default"
+  const value = result.stdout.trim()
+  if (value === "only") return "ff-only"
+  if (value === "false" || value === "no" || value === "off" || value === "0") return "no-ff"
+  return "default"
+}
+
+const effectiveFfConfig = async (
+  mergeStrategy: MergeStrategy,
+  gitCmd: GitCommand,
+  spawn: SpawnFn,
+  repoPath: string,
+): Promise<MergeFfConfig> =>
+  mergeStrategy === "repo-config" ? await readMergeFfConfig(gitCmd, spawn, repoPath) : "ff-only"
+
+const canFastForward = async (
+  gitCmd: GitCommand,
+  spawn: SpawnFn,
+  repoPath: string,
+  sourceBranch: string,
+  targetBranch: string,
+): Promise<boolean> => {
+  const result = await runGit(
+    gitCmd,
+    spawn,
+    ["merge-base", "--is-ancestor", targetBranch, sourceBranch],
+    repoPath,
+  )
+  return result.exitCode === 0
+}
+
+const mergeArgs = (ffConfig: MergeFfConfig, sourceBranch: string): readonly string[] =>
+  ffConfig === "ff-only"
+    ? ["merge", "--ff-only", sourceBranch]
+    : ffConfig === "no-ff"
+      ? ["merge", "--no-ff", sourceBranch]
+      : ["merge", sourceBranch]
+
+const mergeInWorkingCopy = async (
+  gitCmd: GitCommand,
+  spawn: SpawnFn,
+  repoPath: string,
+  sourceBranch: string,
+  targetBranch: string,
+  ffConfig: MergeFfConfig,
+  fastForwardPossible: boolean,
+): Promise<Either<WorktreeError, MergeStyle>> => {
+  const result = await runGit(gitCmd, spawn, mergeArgs(ffConfig, sourceBranch), repoPath)
+  if (result.exitCode === 0) {
+    return right(
+      ffConfig === "no-ff"
+        ? "merge-commit"
+        : ffConfig === "ff-only" || fastForwardPossible
+          ? "fast-forward"
+          : "merge-commit",
+    )
+  }
+  if (ffConfig === "ff-only") {
+    return left({
+      kind: "not-fast-forward",
+      sourceBranch,
+      targetBranch,
+      stderr: combinedOutput(result),
+    })
+  }
+  await runGit(gitCmd, spawn, ["merge", "--abort"], repoPath)
+  return left({
+    kind: "merge-conflict",
+    sourceBranch,
+    targetBranch,
+    detail: combinedOutput(result),
+  })
+}
+
+const mergeCommitRefOnly = async (
+  gitCmd: GitCommand,
+  spawn: SpawnFn,
+  repoPath: string,
+  sourceBranch: string,
+  targetBranch: string,
+): Promise<Either<WorktreeError, void>> => {
+  const oldRef = await runGit(gitCmd, spawn, ["rev-parse", `refs/heads/${targetBranch}`], repoPath)
+  if (oldRef.exitCode !== 0) {
+    return left({
+      kind: "git-error",
+      command: [...gitCmd, "rev-parse", `refs/heads/${targetBranch}`].join(" "),
+      stderr: oldRef.stderr.trim(),
+      message: `git rev-parse failed for target branch ${targetBranch}`,
+    })
+  }
+
+  const mergedTree = await runGit(
+    gitCmd,
+    spawn,
+    ["merge-tree", "--write-tree", targetBranch, sourceBranch],
+    repoPath,
+  )
+  if (mergedTree.exitCode === 1) {
+    return left({
+      kind: "merge-conflict",
+      sourceBranch,
+      targetBranch,
+      detail: mergedTree.stdout.trim(),
+    })
+  }
+  if (mergedTree.exitCode !== 0) {
+    return left({
+      kind: "git-error",
+      command: [...gitCmd, "merge-tree", "--write-tree", targetBranch, sourceBranch].join(" "),
+      stderr: mergedTree.stderr.trim(),
+      message: "git merge-tree failed",
+    })
+  }
+
+  const tree = mergedTree.stdout.split("\n")[0]?.trim() ?? ""
+  if (tree === "") {
+    return left({
+      kind: "git-error",
+      command: [...gitCmd, "merge-tree", "--write-tree", targetBranch, sourceBranch].join(" "),
+      stderr: mergedTree.stderr.trim(),
+      message: "git merge-tree did not output a merged tree",
+    })
+  }
+
+  const commit = await runGit(
+    gitCmd,
+    spawn,
+    [
+      "commit-tree",
+      tree,
+      "-p",
+      targetBranch,
+      "-p",
+      sourceBranch,
+      "-m",
+      `Merge branch '${sourceBranch}' into ${targetBranch}`,
+    ],
+    repoPath,
+  )
+  if (commit.exitCode !== 0) {
+    return left({
+      kind: "git-error",
+      command: [...gitCmd, "commit-tree", tree].join(" "),
+      stderr: commit.stderr.trim(),
+      message: "git commit-tree failed",
+    })
+  }
+
+  const update = await runGit(
+    gitCmd,
+    spawn,
+    ["update-ref", `refs/heads/${targetBranch}`, commit.stdout.trim(), oldRef.stdout.trim()],
+    repoPath,
+  )
+  if (update.exitCode !== 0) {
+    return left({
+      kind: "git-error",
+      command: [...gitCmd, "update-ref", `refs/heads/${targetBranch}`].join(" "),
+      stderr: update.stderr.trim(),
+      message: "git update-ref failed — the target branch moved during the merge; retry",
+    })
+  }
+  return right(undefined)
+}
+
+const branchIsCheckedOut = async (
+  gitCmd: GitCommand,
+  spawn: SpawnFn,
+  repoPath: string,
+  branch: string,
+): Promise<Either<WorktreeError, boolean>> => {
+  const result = await runGit(gitCmd, spawn, ["worktree", "list", "--porcelain"], repoPath)
+  if (result.exitCode !== 0) {
+    return left({
+      kind: "git-error",
+      command: [...gitCmd, "worktree", "list", "--porcelain"].join(" "),
+      stderr: result.stderr.trim(),
+      message: "git worktree list failed",
+    })
+  }
+  return right(result.stdout.split("\n").some((line) => line === `branch refs/heads/${branch}`))
+}
+
 export const mergeWorktree = async (
   spawn: SpawnFn,
   input: MergeWorktreeInput,
-): Promise<Either<WorktreeError, MergeMode>> => {
-  const { repoPath, worktreePath, sourceBranch, targetBranch, gitCmd } = input
+): Promise<Either<WorktreeError, MergeResult>> => {
+  const { repoPath, worktreePath, sourceBranch, targetBranch, mergeStrategy, gitCmd } = input
 
   if (!(await worktreeExists(gitCmd, spawn, repoPath, worktreePath))) {
     return left({ kind: "worktree-not-found", path: worktreePath })
@@ -193,6 +395,14 @@ export const mergeWorktree = async (
   }
 
   const onTarget = (await currentBranch(gitCmd, spawn, repoPath)) === targetBranch
+  const ffConfig = await effectiveFfConfig(mergeStrategy, gitCmd, spawn, repoPath)
+  const fastForwardPossible = await canFastForward(
+    gitCmd,
+    spawn,
+    repoPath,
+    sourceBranch,
+    targetBranch,
+  )
 
   if (onTarget) {
     const dirty = await statusPaths(gitCmd, spawn, repoPath)
@@ -203,22 +413,55 @@ export const mergeWorktree = async (
         return left({ kind: "target-dirty", path: repoPath, files: blocking })
       }
     }
+    const merged = await mergeInWorkingCopy(
+      gitCmd,
+      spawn,
+      repoPath,
+      sourceBranch,
+      targetBranch,
+      ffConfig,
+      fastForwardPossible,
+    )
+    if (isLeft(merged)) return left(merged.failure)
+    return right({ mode: "working-copy", style: merged.success })
   }
 
-  const result = onTarget
-    ? await runGit(gitCmd, spawn, ["merge", "--ff-only", sourceBranch], repoPath)
-    : await runGit(gitCmd, spawn, ["fetch", ".", `${sourceBranch}:${targetBranch}`], repoPath)
+  const targetCheckedOut = await branchIsCheckedOut(gitCmd, spawn, repoPath, targetBranch)
+  if (isLeft(targetCheckedOut)) return left(targetCheckedOut.failure)
+  if (targetCheckedOut.success) {
+    return left({ kind: "target-checked-out", branch: targetBranch })
+  }
 
-  if (result.exitCode !== 0) {
+  if (ffConfig === "ff-only" && !fastForwardPossible) {
     return left({
       kind: "not-fast-forward",
       sourceBranch,
       targetBranch,
-      stderr: [result.stderr.trim(), result.stdout.trim()].filter((text) => text !== "").join("\n"),
+      stderr: "fast-forward is not possible and the merge strategy requires fast-forward-only merges",
     })
   }
 
-  return right(onTarget ? "working-copy" : "ref-only")
+  if (ffConfig !== "no-ff" && fastForwardPossible) {
+    const result = await runGit(
+      gitCmd,
+      spawn,
+      ["fetch", ".", `${sourceBranch}:${targetBranch}`],
+      repoPath,
+    )
+    if (result.exitCode !== 0) {
+      return left({
+        kind: "not-fast-forward",
+        sourceBranch,
+        targetBranch,
+        stderr: combinedOutput(result),
+      })
+    }
+    return right({ mode: "ref-only", style: "fast-forward" })
+  }
+
+  const merged = await mergeCommitRefOnly(gitCmd, spawn, repoPath, sourceBranch, targetBranch)
+  if (isLeft(merged)) return left(merged.failure)
+  return right({ mode: "ref-only", style: "merge-commit" })
 }
 
 export const removeWorktree = async (
@@ -239,24 +482,6 @@ export const removeWorktree = async (
   if (isLeft(result)) return left(result.failure)
 
   return right(undefined)
-}
-
-const branchIsCheckedOut = async (
-  gitCmd: GitCommand,
-  spawn: SpawnFn,
-  repoPath: string,
-  branch: string,
-): Promise<Either<WorktreeError, boolean>> => {
-  const result = await runGit(gitCmd, spawn, ["worktree", "list", "--porcelain"], repoPath)
-  if (result.exitCode !== 0) {
-    return left({
-      kind: "git-error",
-      command: [...gitCmd, "worktree", "list", "--porcelain"].join(" "),
-      stderr: result.stderr.trim(),
-      message: "git worktree list failed",
-    })
-  }
-  return right(result.stdout.split("\n").some((line) => line === `branch refs/heads/${branch}`))
 }
 
 export const deleteBranch = async (

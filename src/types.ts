@@ -1,15 +1,20 @@
 import { Result } from "effect"
 
+export type MergeStrategy = "ff-only" | "repo-config"
+
 export type PluginOptions = {
   readonly preferNixDevelop?: boolean
+  readonly mergeStrategy?: MergeStrategy
 }
 
 export type ResolvedOptions = {
   readonly preferNixDevelop: boolean
+  readonly mergeStrategy: MergeStrategy
 }
 
 export const resolveOptions = (options?: PluginOptions): ResolvedOptions => ({
   preferNixDevelop: options?.preferNixDevelop ?? false,
+  mergeStrategy: options?.mergeStrategy === "repo-config" ? "repo-config" : "ff-only",
 })
 
 export type WorktreeInfo = {
@@ -43,7 +48,17 @@ export type WorktreeError =
       readonly files: readonly string[]
     }
   | { readonly kind: "branch-not-merged"; readonly branch: string }
-  | { readonly kind: "branch-not-found"; readonly branch: string }
+  | {
+      readonly kind: "branch-not-found"
+      readonly branch: string
+    }
+  | { readonly kind: "target-checked-out"; readonly branch: string }
+  | {
+      readonly kind: "merge-conflict"
+      readonly sourceBranch: string
+      readonly targetBranch: string
+      readonly detail?: string
+    }
   | { readonly kind: "invalid-name"; readonly name: string }
   | { readonly kind: "git-not-found"; readonly searchedPaths: readonly string[] }
   | { readonly kind: "uncommitted-changes"; readonly path: string }
@@ -99,7 +114,10 @@ export const toErrorMessage = (error: WorktreeError): string => {
     case "branch-exists":
       return `Branch already exists: ${error.branch}`
     case "not-fast-forward": {
-      const hint = `Cannot fast-forward merge ${error.sourceBranch} into ${error.targetBranch}. Rebase the worktree branch onto ${error.targetBranch} first, then retry.`
+      const hint =
+        `Cannot fast-forward merge ${error.sourceBranch} into ${error.targetBranch} — ` +
+        `fast-forward-only merges are required (plugin default or the repository's ` +
+        `merge.ff=only). Rebase the worktree branch onto ${error.targetBranch} first, then retry.`
       return error.stderr && error.stderr !== "" ? `${hint}\ngit output: ${error.stderr}` : hint
     }
     case "target-dirty":
@@ -112,6 +130,19 @@ export const toErrorMessage = (error: WorktreeError): string => {
       return `Branch ${error.branch} is not merged into the target. Refusing to delete (use -D would be required, which is not allowed).`
     case "branch-not-found":
       return `Branch not found: ${error.branch}`
+    case "target-checked-out":
+      return (
+        `Target branch ${error.branch} is checked out in another worktree — refusing to ` +
+        `update its ref behind that working copy. Merge from the working copy that has ` +
+        `${error.branch} checked out instead.`
+      )
+    case "merge-conflict": {
+      const hint =
+        `Merging ${error.sourceBranch} into ${error.targetBranch} produced conflicts; ` +
+        `the merge was rolled back and nothing was changed. Rebase the worktree branch ` +
+        `onto ${error.targetBranch} and resolve the conflicts in the worktree, then retry.`
+      return error.detail && error.detail !== "" ? `${hint}\ngit output: ${error.detail}` : hint
+    }
     case "invalid-name":
       return (
         `Invalid name '${error.name}': repo_short and source_branch must be lowercase ` +

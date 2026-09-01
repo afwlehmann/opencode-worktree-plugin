@@ -8,6 +8,8 @@ import {
   flatMap,
   mapError,
   toErrorMessage,
+  resolveOptions,
+  type MergeStrategy,
   type WorktreeError,
 } from "./types.js"
 
@@ -107,6 +109,25 @@ describe("toErrorMessage", () => {
     )
   })
 
+  it("formats merge-conflict with rollback and rebase hint", () => {
+    const error: WorktreeError = {
+      kind: "merge-conflict",
+      sourceBranch: "feat",
+      targetBranch: "main",
+      detail: "CONFLICT (content): Merge conflict in file.txt",
+    }
+    const message = toErrorMessage(error)
+    expect(message).toContain("produced conflicts")
+    expect(message).toContain("rolled back")
+    expect(message).toContain("Rebase the worktree branch onto main")
+    expect(message).toContain("git output: CONFLICT (content): Merge conflict in file.txt")
+  })
+
+  it("formats target-checked-out with a merge-from-there hint", () => {
+    const error: WorktreeError = { kind: "target-checked-out", branch: "main" }
+    expect(toErrorMessage(error)).toContain("Target branch main is checked out in another worktree")
+  })
+
   it("formats git-not-found", () => {
     const error: WorktreeError = {
       kind: "git-not-found",
@@ -143,5 +164,26 @@ describe("toErrorMessage", () => {
     expect(toErrorMessage(error)).toContain("Clipboard unavailable")
     expect(toErrorMessage(error)).toContain("pbcopy")
     expect(toErrorMessage(error)).toContain("boom")
+  })
+})
+
+describe("resolveOptions", () => {
+  it("defaults to ff-only merge strategy and plain git", () => {
+    expect(resolveOptions(undefined)).toEqual({
+      preferNixDevelop: false,
+      mergeStrategy: "ff-only",
+    })
+  })
+
+  it("resolves the repo-config merge strategy", () => {
+    expect(resolveOptions({ mergeStrategy: "repo-config" })).toEqual({
+      preferNixDevelop: false,
+      mergeStrategy: "repo-config",
+    })
+  })
+
+  it("falls back to ff-only for unrecognized merge strategy values", () => {
+    const bogus = "bogus" as unknown as MergeStrategy
+    expect(resolveOptions({ mergeStrategy: bogus }).mergeStrategy).toBe("ff-only")
   })
 })

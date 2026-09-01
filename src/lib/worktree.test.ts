@@ -30,12 +30,13 @@ const unwrapFailure = (either: Either<WorktreeError, unknown>): WorktreeError =>
 const worktreeListResponse = (worktreePath: string): SpawnResult =>
   ok(`worktree /repo\n\nworktree ${worktreePath}\n`)
 
-describe("mergeWorktree", () => {
+describe("mergeWorktree (mergeStrategy: ff-only)", () => {
   const mergeInput = {
     repoPath: "/repo",
     worktreePath: "/root/ocp-feat",
     sourceBranch: "feat",
     targetBranch: "main",
+    mergeStrategy: "ff-only" as const,
     gitCmd: ["git"] as const,
   }
 
@@ -47,14 +48,17 @@ describe("mergeWorktree", () => {
       if (key === "git rev-parse --verify refs/heads/feat") return ok()
       if (key === "git rev-parse --verify refs/heads/main") return ok()
       if (key === "git rev-parse --abbrev-ref HEAD") return ok("main\n")
+      if (key === "git status --porcelain -uall") return ok("")
+      if (key === "git merge-base --is-ancestor main feat") return ok()
       if (key === "git merge --ff-only feat") return ok()
       return worktreeListResponse("/root/ocp-feat")
     }
 
     const result = await mergeWorktree(spawn, mergeInput)
-    expect(getOrThrow(result)).toBe("working-copy")
+    expect(getOrThrow(result)).toEqual({ mode: "working-copy", style: "fast-forward" })
     expect(calls).toContain("git merge --ff-only feat")
     expect(calls.some((c) => c.includes("checkout"))).toBe(false)
+    expect(calls.some((c) => c.includes("config --get merge.ff"))).toBe(false)
   })
 
   it("refuses with target-dirty when uncommitted changes would be overwritten", async () => {
@@ -95,7 +99,7 @@ describe("mergeWorktree", () => {
     }
 
     const result = await mergeWorktree(spawn, mergeInput)
-    expect(getOrThrow(result)).toBe("working-copy")
+    expect(getOrThrow(result)).toEqual({ mode: "working-copy", style: "fast-forward" })
     expect(calls).toContain("git merge --ff-only feat")
   })
 
@@ -105,6 +109,7 @@ describe("mergeWorktree", () => {
       "git rev-parse --verify refs/heads/feat": ok(),
       "git rev-parse --verify refs/heads/main": ok(),
       "git rev-parse --abbrev-ref HEAD": ok("develop\n"),
+      "git merge-base --is-ancestor main feat": ok(),
       "git fetch . feat:main": {
         exitCode: 1,
         stdout: "error: cannot lock ref 'refs/heads/main'",
@@ -128,28 +133,51 @@ describe("mergeWorktree", () => {
       if (key === "git rev-parse --verify refs/heads/feat") return ok()
       if (key === "git rev-parse --verify refs/heads/main") return ok()
       if (key === "git rev-parse --abbrev-ref HEAD") return ok("develop\n")
+      if (key === "git merge-base --is-ancestor main feat") return ok()
       if (key === "git fetch . feat:main") return ok()
       return worktreeListResponse("/root/ocp-feat")
     }
 
     const result = await mergeWorktree(spawn, mergeInput)
-    expect(getOrThrow(result)).toBe("ref-only")
+    expect(getOrThrow(result)).toEqual({ mode: "ref-only", style: "fast-forward" })
     expect(calls).toContain("git fetch . feat:main")
     expect(calls.some((c) => c.includes("checkout"))).toBe(false)
-    expect(calls.some((c) => c.includes("merge"))).toBe(false)
+    expect(calls.some((c) => c.startsWith("git merge "))).toBe(false)
   })
 
-  it("reports not-fast-forward when the ref update is rejected", async () => {
+  it("reports not-fast-forward when the branches have diverged", async () => {
+    const calls: string[] = []
+    const spawn: SpawnFn = async (command) => {
+      const key = command.join(" ")
+      calls.push(key)
+      if (key === "git rev-parse --verify refs/heads/feat") return ok()
+      if (key === "git rev-parse --verify refs/heads/main") return ok()
+      if (key === "git rev-parse --abbrev-ref HEAD") return ok("develop\n")
+      if (key === "git merge-base --is-ancestor main feat") return fail("not an ancestor")
+      return worktreeListResponse("/root/ocp-feat")
+    }
+
+    const result = await mergeWorktree(spawn, mergeInput)
+    expect(unwrapFailure(result).kind).toBe("not-fast-forward")
+    expect(calls.some((c) => c.startsWith("git fetch"))).toBe(false)
+  })
+
+  it("propagates git stderr when the ref update is rejected", async () => {
     const spawn = mockSpawn({
       "git worktree list --porcelain": worktreeListResponse("/root/ocp-feat"),
       "git rev-parse --verify refs/heads/feat": ok(),
       "git rev-parse --verify refs/heads/main": ok(),
       "git rev-parse --abbrev-ref HEAD": ok("develop\n"),
-      "git fetch . feat:main": fail("! [rejected] feat -> main (non-fast-forward)"),
+      "git merge-base --is-ancestor main feat": ok(),
+      "git fetch . feat:main": fail("! [rejected] (non-fast-forward)"),
     })
 
     const result = await mergeWorktree(spawn, mergeInput)
-    expect(unwrapFailure(result).kind).toBe("not-fast-forward")
+    const failure = unwrapFailure(result)
+    expect(failure.kind).toBe("not-fast-forward")
+    if (failure.kind === "not-fast-forward") {
+      expect(failure.stderr).toContain("non-fast-forward")
+    }
   })
 
   it("reports branch-not-found when the target branch is missing", async () => {
@@ -180,22 +208,209 @@ describe("mergeWorktree", () => {
     const result = await mergeWorktree(spawn, mergeInput)
     expect(unwrapFailure(result).kind).toBe("worktree-not-found")
   })
+})
 
-  it("propagates git stderr on a not-fast-forward failure", async () => {
+describe("mergeWorktree (mergeStrategy: repo-config)", () => {
+  const mergeInput = {
+    repoPath: "/repo",
+    worktreePath: "/root/ocp-feat",
+    sourceBranch: "feat",
+    targetBranch: "main",
+    mergeStrategy: "repo-config" as const,
+    gitCmd: ["git"] as const,
+  }
+
+  it("merges without flags in the working copy when merge.ff is unset", async () => {
+    const calls: string[] = []
+    const spawn: SpawnFn = async (command) => {
+      const key = command.join(" ")
+      calls.push(key)
+      if (key === "git rev-parse --verify refs/heads/feat") return ok()
+      if (key === "git rev-parse --verify refs/heads/main") return ok()
+      if (key === "git rev-parse --abbrev-ref HEAD") return ok("main\n")
+      if (key === "git config --get merge.ff") return fail("exit code 1")
+      if (key === "git merge-base --is-ancestor main feat") return ok()
+      if (key === "git merge feat") return ok()
+      return worktreeListResponse("/root/ocp-feat")
+    }
+
+    const result = await mergeWorktree(spawn, mergeInput)
+    expect(getOrThrow(result)).toEqual({ mode: "working-copy", style: "fast-forward" })
+    expect(calls).toContain("git merge feat")
+    expect(calls.some((c) => c.includes("--ff-only"))).toBe(false)
+  })
+
+  it("passes --ff-only when the repository configures merge.ff=only", async () => {
+    const spawn = mockSpawn({
+      "git worktree list --porcelain": worktreeListResponse("/root/ocp-feat"),
+      "git rev-parse --verify refs/heads/feat": ok(),
+      "git rev-parse --verify refs/heads/main": ok(),
+      "git rev-parse --abbrev-ref HEAD": ok("main\n"),
+      "git config --get merge.ff": ok("only\n"),
+      "git merge-base --is-ancestor main feat": ok(),
+      "git merge --ff-only feat": ok(),
+    })
+
+    const result = await mergeWorktree(spawn, mergeInput)
+    expect(getOrThrow(result)).toEqual({ mode: "working-copy", style: "fast-forward" })
+  })
+
+  it("passes --no-ff and reports a merge commit when merge.ff=false", async () => {
+    const calls: string[] = []
+    const spawn: SpawnFn = async (command) => {
+      const key = command.join(" ")
+      calls.push(key)
+      if (key === "git rev-parse --verify refs/heads/feat") return ok()
+      if (key === "git rev-parse --verify refs/heads/main") return ok()
+      if (key === "git rev-parse --abbrev-ref HEAD") return ok("main\n")
+      if (key === "git config --get merge.ff") return ok("false\n")
+      if (key === "git merge-base --is-ancestor main feat") return ok()
+      if (key === "git merge --no-ff feat") return ok()
+      return worktreeListResponse("/root/ocp-feat")
+    }
+
+    const result = await mergeWorktree(spawn, mergeInput)
+    expect(getOrThrow(result)).toEqual({ mode: "working-copy", style: "merge-commit" })
+    expect(calls).toContain("git merge --no-ff feat")
+  })
+
+  it("rolls back and reports merge-conflict when a working-copy merge conflicts", async () => {
+    const calls: string[] = []
+    const spawn: SpawnFn = async (command) => {
+      const key = command.join(" ")
+      calls.push(key)
+      if (key === "git rev-parse --verify refs/heads/feat") return ok()
+      if (key === "git rev-parse --verify refs/heads/main") return ok()
+      if (key === "git rev-parse --abbrev-ref HEAD") return ok("main\n")
+      if (key === "git config --get merge.ff") return fail("exit code 1")
+      if (key === "git merge-base --is-ancestor main feat") return fail("not an ancestor")
+      if (key === "git status --porcelain -uall") return ok("")
+      if (key === "git merge feat")
+        return fail("Automatic merge failed; fix conflicts and then commit the result.")
+      if (key === "git merge --abort") return ok()
+      return worktreeListResponse("/root/ocp-feat")
+    }
+
+    const result = await mergeWorktree(spawn, mergeInput)
+    expect(unwrapFailure(result).kind).toBe("merge-conflict")
+    expect(calls).toContain("git merge --abort")
+  })
+
+  it("updates the ref without checkout when merge.ff is unset and a fast-forward is possible", async () => {
     const spawn = mockSpawn({
       "git worktree list --porcelain": worktreeListResponse("/root/ocp-feat"),
       "git rev-parse --verify refs/heads/feat": ok(),
       "git rev-parse --verify refs/heads/main": ok(),
       "git rev-parse --abbrev-ref HEAD": ok("develop\n"),
-      "git fetch . feat:main": fail("! [rejected] (non-fast-forward)"),
+      "git config --get merge.ff": fail("exit code 1"),
+      "git merge-base --is-ancestor main feat": ok(),
+      "git fetch . feat:main": ok(),
+    })
+
+    const result = await mergeWorktree(spawn, mergeInput)
+    expect(getOrThrow(result)).toEqual({ mode: "ref-only", style: "fast-forward" })
+  })
+
+  it("creates a merge commit via plumbing when the branches have diverged", async () => {
+    const calls: string[] = []
+    const spawn: SpawnFn = async (command) => {
+      const key = command.join(" ")
+      calls.push(key)
+      if (key === "git rev-parse --verify refs/heads/feat") return ok()
+      if (key === "git rev-parse --verify refs/heads/main") return ok()
+      if (key === "git rev-parse --abbrev-ref HEAD") return ok("develop\n")
+      if (key === "git config --get merge.ff") return fail("exit code 1")
+      if (key === "git merge-base --is-ancestor main feat") return fail("not an ancestor")
+      if (key === "git rev-parse refs/heads/main") return ok("OLD\n")
+      if (key === "git merge-tree --write-tree main feat") return ok("TREE\n")
+      if (key === "git commit-tree TREE -p main -p feat -m Merge branch 'feat' into main")
+        return ok("COMMIT\n")
+      if (key === "git update-ref refs/heads/main COMMIT OLD") return ok()
+      return worktreeListResponse("/root/ocp-feat")
+    }
+
+    const result = await mergeWorktree(spawn, mergeInput)
+    expect(getOrThrow(result)).toEqual({ mode: "ref-only", style: "merge-commit" })
+    expect(calls).toContain("git update-ref refs/heads/main COMMIT OLD")
+    expect(calls.some((c) => c.startsWith("git fetch"))).toBe(false)
+    expect(calls.some((c) => c.startsWith("git checkout"))).toBe(false)
+  })
+
+  it("creates a merge commit even when a fast-forward is possible if merge.ff=false", async () => {
+    const calls: string[] = []
+    const spawn: SpawnFn = async (command) => {
+      const key = command.join(" ")
+      calls.push(key)
+      if (key === "git rev-parse --verify refs/heads/feat") return ok()
+      if (key === "git rev-parse --verify refs/heads/main") return ok()
+      if (key === "git rev-parse --abbrev-ref HEAD") return ok("develop\n")
+      if (key === "git config --get merge.ff") return ok("false\n")
+      if (key === "git merge-base --is-ancestor main feat") return ok()
+      if (key === "git rev-parse refs/heads/main") return ok("OLD\n")
+      if (key === "git merge-tree --write-tree main feat") return ok("TREE\n")
+      if (key === "git commit-tree TREE -p main -p feat -m Merge branch 'feat' into main")
+        return ok("COMMIT\n")
+      if (key === "git update-ref refs/heads/main COMMIT OLD") return ok()
+      return worktreeListResponse("/root/ocp-feat")
+    }
+
+    const result = await mergeWorktree(spawn, mergeInput)
+    expect(getOrThrow(result)).toEqual({ mode: "ref-only", style: "merge-commit" })
+    expect(calls.some((c) => c.startsWith("git fetch"))).toBe(false)
+  })
+
+  it("reports not-fast-forward when merge.ff=only and the branches have diverged", async () => {
+    const spawn = mockSpawn({
+      "git worktree list --porcelain": worktreeListResponse("/root/ocp-feat"),
+      "git rev-parse --verify refs/heads/feat": ok(),
+      "git rev-parse --verify refs/heads/main": ok(),
+      "git rev-parse --abbrev-ref HEAD": ok("develop\n"),
+      "git config --get merge.ff": ok("only\n"),
+      "git merge-base --is-ancestor main feat": fail("not an ancestor"),
+    })
+
+    const result = await mergeWorktree(spawn, mergeInput)
+    expect(unwrapFailure(result).kind).toBe("not-fast-forward")
+  })
+
+  it("reports merge-conflict when the plumbing merge detects conflicts", async () => {
+    const spawn = mockSpawn({
+      "git worktree list --porcelain": worktreeListResponse("/root/ocp-feat"),
+      "git rev-parse --verify refs/heads/feat": ok(),
+      "git rev-parse --verify refs/heads/main": ok(),
+      "git rev-parse --abbrev-ref HEAD": ok("develop\n"),
+      "git config --get merge.ff": fail("exit code 1"),
+      "git merge-base --is-ancestor main feat": fail("not an ancestor"),
+      "git rev-parse refs/heads/main": ok("OLD\n"),
+      "git merge-tree --write-tree main feat": {
+        exitCode: 1,
+        stdout: "CONFLICT (content): Merge conflict in file.txt",
+        stderr: "",
+      },
     })
 
     const result = await mergeWorktree(spawn, mergeInput)
     const failure = unwrapFailure(result)
-    expect(failure.kind).toBe("not-fast-forward")
-    if (failure.kind === "not-fast-forward") {
-      expect(failure.stderr).toContain("non-fast-forward")
+    expect(failure.kind).toBe("merge-conflict")
+    if (failure.kind === "merge-conflict") {
+      expect(failure.detail).toContain("CONFLICT")
     }
+  })
+
+  it("refuses to update a target branch that is checked out in another worktree", async () => {
+    const spawn = mockSpawn({
+      "git worktree list --porcelain": ok(
+        "worktree /repo\n\nworktree /root/ocp-feat\n\nbranch refs/heads/main\n",
+      ),
+      "git rev-parse --verify refs/heads/feat": ok(),
+      "git rev-parse --verify refs/heads/main": ok(),
+      "git rev-parse --abbrev-ref HEAD": ok("develop\n"),
+      "git config --get merge.ff": fail("exit code 1"),
+      "git merge-base --is-ancestor main feat": ok(),
+    })
+
+    const result = await mergeWorktree(spawn, mergeInput)
+    expect(unwrapFailure(result).kind).toBe("target-checked-out")
   })
 })
 

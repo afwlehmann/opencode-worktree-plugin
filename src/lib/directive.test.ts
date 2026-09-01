@@ -17,8 +17,13 @@ describe("WORKTREE_DIRECTIVE", () => {
   it("forbids raw git worktree commands", () => {
     expect(WORKTREE_DIRECTIVE).toContain("git worktree add")
     expect(WORKTREE_DIRECTIVE).toContain("git worktree remove")
-    expect(WORKTREE_DIRECTIVE).toContain("git merge --ff-only")
+    expect(WORKTREE_DIRECTIVE).toContain("git merge <branch>")
     expect(WORKTREE_DIRECTIVE).toContain("git branch -d")
+  })
+
+  it("explains the merge safety handling", () => {
+    expect(WORKTREE_DIRECTIVE).toContain("merge safety")
+    expect(WORKTREE_DIRECTIVE).toContain("merge.ff")
   })
 
   it("explains the permission handling", () => {
