@@ -1,7 +1,7 @@
 {
   "name": "opencode-worktree-plugin",
   "version": "0.3.0",
-  "description": "Git worktree management plugin for opencode — create, merge, and remove worktrees with dynamic permissions and TUI status bar",
+  "description": "Git worktree management plugin for opencode \u2014 create, merge, and remove worktrees with dynamic permissions and TUI status bar",
   "type": "module",
   "license": "MIT",
   "author": "Alexander Lehmann <afwlehmann@googlemail.com>",
@@ -17,11 +17,12 @@
     },
     "./tui": {
       "import": "./dist/tui.js",
-      "types": "./dist/tui.d.ts"
+      "types": "./types/tui.d.ts"
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "types"
   ],
   "scripts": {
     "build": "vite build",
