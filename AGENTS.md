@@ -34,7 +34,8 @@ Two entry points (SDK enforces `server?: never` / `tui?: never`):
 - `src/lib/directive.ts` — system-prompt directive injected via `experimental.chat.system.transform`
 - `src/lib/logger.ts` — `createLogger` helper: wraps `client.app.log` for structured info/warn/error logging from tools
 - `src/lib/active-worktree.ts` — pure extraction/fold of the session's `worktree_*` tool-call parts into the currently active worktrees; branch comes from the tool call (live `vcs.branch` belongs to the session's cwd, not the worktree)
-- `src/lib/status-label.ts` — `app_bottom` label formatting: the latest active worktree name with a total count (`config-fix (3)`); the branch is only appended when the live branch diverges from the worktree name's last dash-segment (fallback `<directory>:<branch>` outside tracked worktrees). Clicking the label opens a `DialogSelect` via `api.ui.dialog.replace` listing all active worktrees with their absolute paths.
+- `src/lib/status-label.ts` — `app_bottom` label formatting: the latest active worktree name with a total count (`config-fix (3)`); the branch is only appended when the live branch diverges from the worktree name's last dash-segment (fallback `<directory>:<branch>` outside tracked worktrees). Clicking the label opens a `DialogSelect` via `api.ui.dialog.replace` listing all active worktrees with their absolute paths; selecting an option copies the path to the clipboard (`src/lib/clipboard.ts`: `pbcopy` on darwin, `wl-copy`/`xclip`/`xsel` on linux) and confirms via a success toast (warning toast on failure).
+- `src/lib/clipboard.ts` — clipboard copy via platform stdin commands, returning `Either<WorktreeError, void>` with `clipboard-unavailable` after all candidates fail.
 - `src/tools/` — tool definitions with Zod args (all three tools share `repo_short` + `source_branch` arg names for consistency)
 - `src/types.ts` — `Either<E, T>`, `WorktreeError` union
 

@@ -1,9 +1,15 @@
-import { describe, it, expect } from "vitest"
+import { describe, it, expect, vi, beforeEach } from "vitest"
 import * as path from "node:path"
 import * as os from "node:os"
 import type { Message, Part } from "@opencode-ai/sdk/v2"
 import type { TuiPluginModule } from "@opencode-ai/plugin/tui"
+import { copyToClipboard } from "./lib/clipboard.js"
+import { left, right } from "./types.js"
 import tuiModule from "./tui.js"
+
+vi.mock("./lib/clipboard.js", () => ({ copyToClipboard: vi.fn() }))
+
+const mockedCopy = vi.mocked(copyToClipboard)
 
 type RenderedNode = { tag?: unknown; props?: Record<string, unknown>; children?: unknown[] }
 ;(globalThis as Record<string, unknown>)["React"] = {
@@ -17,6 +23,8 @@ type RenderedNode = { tag?: unknown; props?: Record<string, unknown>; children?:
 type SlotRegistration = { order: number; slots: Record<string, unknown> }
 
 type DialogOption = { title: string; value: string; description: string }
+
+type ToastInput = { variant?: string; title?: string; message: string }
 
 type MockApi = {
   theme: { current: Record<string, string> }
@@ -34,11 +42,12 @@ type MockApi = {
   event: { on: (name: string, handler: (event: never) => void) => void }
   ui: {
     dialog: { replace: (render: () => unknown, onClose?: () => void) => void; clear: () => void }
+    toast: (input: ToastInput) => void
     DialogSelect: (props: {
       title: string
       placeholder?: string
-      options: DialogOption[]
-      onSelect?: () => void
+      options: Array<DialogOption & { onSelect?: () => void }>
+      onSelect?: (option: DialogOption) => void
     }) => never
   }
 }
@@ -49,6 +58,7 @@ type MockApiBundle = {
   handlers: Record<string, (event: never) => void>
   parts: Part[]
   replacements: Array<{ render: () => unknown; onClose?: () => void }>
+  toasts: ToastInput[]
 }
 
 type MockApiOptions = {
@@ -64,6 +74,7 @@ const mockApi = ({
   const handlers: Record<string, (event: never) => void> = {}
   const parts: Part[] = []
   const replacements: Array<{ render: () => unknown; onClose?: () => void }> = []
+  const toasts: ToastInput[] = []
   const sessionMessage: Message = { id: "m1", role: "assistant" } as unknown as Message
   const api: MockApi = {
     theme: { current: { textMuted: "#808080" } },
@@ -88,11 +99,17 @@ const mockApi = ({
           replacements.length = 0
         },
       },
-      DialogSelect: (props: { title: string; options: DialogOption[]; onSelect?: () => void }) =>
-        ({ props }) as never,
+      toast: (input) => {
+        toasts.push(input)
+      },
+      DialogSelect: (props: {
+        title: string
+        options: Array<DialogOption & { onSelect?: () => void }>
+        onSelect?: (option: DialogOption) => void
+      }) => ({ props }) as never,
     },
   }
-  return { api, registrations, handlers, parts, replacements }
+  return { api, registrations, handlers, parts, replacements, toasts }
 }
 
 const activate = async (bundle: MockApiBundle): Promise<void> => {
@@ -178,6 +195,11 @@ const clickWorktreeLabel = (bundle: MockApiBundle): void => {
 }
 
 describe("tui plugin wiring (mock api)", () => {
+  beforeEach(() => {
+    mockedCopy.mockReset()
+    mockedCopy.mockResolvedValue(right(undefined))
+  })
+
   it("registers exactly one slot group targeting app_bottom", async () => {
     const bundle = mockApi()
     await activate(bundle)
@@ -276,7 +298,7 @@ describe("tui plugin wiring (mock api)", () => {
     ])
   })
 
-  it("closes the dialog on selection", async () => {
+  it("copies the selected worktree path to the clipboard, confirms via toast, and closes the dialog", async () => {
     const bundle = mockApi({ branch: "main" })
     await activate(bundle)
     enterSession(bundle, "s1")
@@ -285,12 +307,58 @@ describe("tui plugin wiring (mock api)", () => {
     clickWorktreeLabel(bundle)
     expect(bundle.replacements).toHaveLength(1)
 
-    bundle.replacements[0]?.render()
+    const worktreePath = path.join(
+      os.homedir(),
+      ".local",
+      "state",
+      "opencode",
+      "worktrees",
+      "integ-feat",
+    )
     const dialog = bundle.replacements[0].render() as {
-      props: { onSelect?: () => void }
+      props: { onSelect?: (option: DialogOption) => void }
     }
-    dialog.props.onSelect?.()
+    dialog.props.onSelect?.({
+      title: "integ-feat",
+      value: "integ-feat",
+      description: worktreePath,
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
 
+    expect(mockedCopy).toHaveBeenCalledWith(worktreePath)
+    expect(bundle.toasts).toEqual([
+      {
+        variant: "success",
+        title: "integ-feat",
+        message: `Copied to clipboard: ${worktreePath}`,
+      },
+    ])
+    expect(bundle.replacements).toHaveLength(0)
+  })
+
+  it("warns via toast when the clipboard copy fails", async () => {
+    const bundle = mockApi({ branch: "main" })
+    await activate(bundle)
+    enterSession(bundle, "s1")
+
+    dispatchPartUpdated(bundle, worktreeToolPart("worktree_create", "integ", "feat"))
+    clickWorktreeLabel(bundle)
+
+    mockedCopy.mockResolvedValue(
+      left({ kind: "clipboard-unavailable", tried: ["pbcopy"], stderr: "boom" }),
+    )
+    const dialog = bundle.replacements[0].render() as {
+      props: { onSelect?: (option: DialogOption) => void }
+    }
+    dialog.props.onSelect?.({
+      title: "integ-feat",
+      value: "integ-feat",
+      description: "/tmp/wt/integ-feat",
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(bundle.toasts[0]?.variant).toBe("warning")
+    expect(bundle.toasts[0]?.message).toContain("pbcopy")
     expect(bundle.replacements).toHaveLength(0)
   })
 

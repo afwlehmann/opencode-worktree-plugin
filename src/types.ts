@@ -43,6 +43,11 @@ export type WorktreeError =
   | { readonly kind: "git-not-found"; readonly searchedPaths: readonly string[] }
   | { readonly kind: "uncommitted-changes"; readonly path: string }
   | {
+      readonly kind: "clipboard-unavailable"
+      readonly tried: readonly string[]
+      readonly stderr: string
+    }
+  | {
       readonly kind: "copy-failed"
       readonly src: string
       readonly dest: string
@@ -106,5 +111,10 @@ export const toErrorMessage = (error: WorktreeError): string => {
       return `Worktree at ${error.path} has uncommitted changes. Commit or stash before removing.`
     case "copy-failed":
       return `Failed to copy ${error.src} to ${error.dest}: ${error.message}`
+    case "clipboard-unavailable":
+      return (
+        `Clipboard unavailable (tried: ${error.tried.join(", ") || "no candidates for this platform"}).` +
+        (error.stderr !== "" ? ` ${error.stderr}` : "")
+      )
   }
 }

@@ -5,6 +5,8 @@ import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui"
 import type { PluginOptions } from "./types.js"
 import { resolveOptions } from "./types.js"
 import { hasFlakeNix } from "./lib/git-env.js"
+import { copyToClipboard } from "./lib/clipboard.js"
+import { isLeft, toErrorMessage } from "./types.js"
 import { getWorktreeRoot } from "./lib/paths.js"
 import {
   activeWorktreesFrom,
@@ -87,6 +89,28 @@ const tuiPlugin: TuiPlugin = async (api, options) => {
     )
   }
 
+  const handleWorktreeSelect = async (option: {
+    readonly title: string
+    readonly description?: string
+  }): Promise<void> => {
+    const target = option.description ?? option.title
+    const result = await copyToClipboard(target)
+    if (isLeft(result)) {
+      api.ui.toast({
+        variant: "warning",
+        title: option.title,
+        message: toErrorMessage(result.failure),
+      })
+    } else {
+      api.ui.toast({
+        variant: "success",
+        title: option.title,
+        message: `Copied to clipboard: ${target}`,
+      })
+    }
+    api.ui.dialog.clear()
+  }
+
   const openWorktreeDialog = (): void => {
     const entries = ensureWorktreeEntries(currentSessionID())
     const options =
@@ -108,7 +132,7 @@ const tuiPlugin: TuiPlugin = async (api, options) => {
         title: "Active worktrees",
         placeholder: "worktrees",
         options,
-        onSelect: () => api.ui.dialog.clear(),
+        onSelect: (option) => void handleWorktreeSelect(option),
       }),
     )
   }

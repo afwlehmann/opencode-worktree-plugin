@@ -109,4 +109,15 @@ describe("toErrorMessage", () => {
     expect(toErrorMessage(error)).toContain("^[a-z0-9][a-z0-9-]*$")
     expect(toErrorMessage(error)).toContain("no slashes")
   })
+
+  it("formats clipboard-unavailable with the tried commands and stderr", () => {
+    const error: WorktreeError = {
+      kind: "clipboard-unavailable",
+      tried: ["pbcopy"],
+      stderr: "boom",
+    }
+    expect(toErrorMessage(error)).toContain("Clipboard unavailable")
+    expect(toErrorMessage(error)).toContain("pbcopy")
+    expect(toErrorMessage(error)).toContain("boom")
+  })
 })
