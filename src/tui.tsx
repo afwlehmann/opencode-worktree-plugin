@@ -1,9 +1,21 @@
-import { createMemo, Show } from "solid-js"
+import { Show } from "solid-js"
+import type { Message, Part } from "@opencode-ai/sdk/v2"
 import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui"
 import type { PluginOptions } from "./types.js"
 import { resolveOptions } from "./types.js"
-import { isDefaultTitle } from "./lib/title.js"
 import { hasFlakeNix } from "./lib/git-env.js"
+import { getWorktreeRoot } from "./lib/paths.js"
+import {
+  activeWorktreesFrom,
+  collectWorktreeCalls,
+  extractWorktreeCalls,
+  recordWorktreeCall,
+  type ActiveWorktree,
+  type WorktreeToolCall,
+} from "./lib/active-worktree.js"
+import { formatSessionStatusLabel, formatSessionStatus } from "./lib/status-label.js"
+
+const MAX_SEED_MESSAGES = 200
 
 const defaultExists = async (filePath: string): Promise<boolean> => {
   try {
@@ -25,43 +37,58 @@ const tuiPlugin: TuiPlugin = async (api, options) => {
     flakePresent = false
   }
 
-  const theme = createMemo(() => api.theme.current)
+  let seedCalls: readonly WorktreeToolCall[] = []
+  let eventCalls: readonly WorktreeToolCall[] = []
+  let seedSession: string | undefined = undefined
+  let eventSession: string | undefined = undefined
 
-  const sessionID = createMemo(() => {
+  const seedCallsForSession = (sid: string): void => {
+    const messages: readonly Message[] = api.state.session.messages(sid)
+    const recent = messages.slice(-MAX_SEED_MESSAGES)
+    seedCalls = collectWorktreeCalls(
+      recent,
+      (messageID) => api.state.part(messageID) as readonly Part[],
+    )
+    seedSession = sid
+  }
+
+  const ensureWorktreeEntries = (sid: string | undefined): readonly ActiveWorktree[] => {
+    if (sid === undefined) return []
+    if (seedSession !== sid) seedCallsForSession(sid)
+    if (eventSession !== sid) {
+      eventCalls = []
+      eventSession = sid
+    }
+    return activeWorktreesFrom(seedCalls, eventCalls)
+  }
+
+  const currentSessionID = (): string | undefined => {
     const route = api.route.current
     if (route.name !== "session") return undefined
     return route.params?.sessionID
-  })
+  }
 
-  const sessionTitle = createMemo(() => {
-    const sid = sessionID()
-    if (!sid) return undefined
-    const session = api.state.session.get(sid)
-    return session?.title && !isDefaultTitle(session.title) ? session.title : undefined
-  })
-
-  const branch = createMemo(() => api.state.vcs?.branch ?? "unknown")
-
-  const dir = createMemo(() => api.state.path.directory)
-
-  const worktreeName = createMemo(() => {
-    const d = dir()
-    const parts = d.split("/")
-    return parts[parts.length - 1] ?? d
-  })
-
-  const statusText = createMemo(() => {
-    const sid = sessionID()
+  const currentStatusText = (): string => {
+    const sid = currentSessionID()
     if (!sid) return ""
-    const status = api.state.session.status(sid)
-    return status ?? ""
-  })
+    return formatSessionStatus(api.state.session.status(sid))
+  }
+
+  const currentStatusLabel = (): string => {
+    const entries = ensureWorktreeEntries(currentSessionID())
+    return formatSessionStatusLabel(
+      api.state.path.directory,
+      api.state.vcs?.branch,
+      getWorktreeRoot(),
+      entries,
+    )
+  }
 
   api.slots.register({
     order: 100,
     slots: {
       app_bottom: () => {
-        const t = theme()
+        const t = api.theme.current
         return (
           <box
             width="100%"
@@ -71,14 +98,10 @@ const tuiPlugin: TuiPlugin = async (api, options) => {
             paddingRight={1}
             flexShrink={0}
           >
-            <text fg={t.textMuted}>
-              {worktreeName()}-{branch()}
-            </text>
-            <text fg={t.textMuted}>::</text>
-            <Show when={sessionTitle()} fallback={<text fg={t.textMuted}>Untitled session</text>}>
-              {(title) => <text fg={t.text}>{title()}</text>}
+            <text fg={t.textMuted}>{currentStatusLabel()}</text>
+            <Show when={currentStatusText()}>
+              {(status) => <text fg={t.info}>[{status()}]</text>}
             </Show>
-            <Show when={statusText()}>{(status) => <text fg={t.info}>[{status()}]</text>}</Show>
             <box flexGrow={1} />
             <Show when={opts.preferNixDevelop && flakePresent}>
               <text fg={t.accent}>nix</text>
@@ -89,8 +112,27 @@ const tuiPlugin: TuiPlugin = async (api, options) => {
     },
   })
 
-  api.event.on("session.updated", () => {
-    void sessionTitle()
+  api.event.on("message.part.updated", (event) => {
+    const sid = currentSessionID()
+    const partSessionID = (event.properties.part as { sessionID?: string }).sessionID
+    if (sid === undefined || partSessionID !== sid) return
+    const calls = extractWorktreeCalls([event.properties.part as Part])
+    if (calls.length === 0) return
+    if (eventSession !== sid) {
+      eventCalls = []
+      eventSession = sid
+    }
+    eventCalls = calls.reduce(recordWorktreeCall, eventCalls)
+  })
+
+  api.event.on("message.part.removed", (event) => {
+    const sid = currentSessionID()
+    if (sid === undefined || event.properties.sessionID !== sid) return
+    if (seedSession === sid) seedSession = undefined
+    if (eventSession === sid) {
+      eventCalls = []
+      eventSession = undefined
+    }
   })
 }
 

@@ -22,7 +22,7 @@ All commands should be run via `nix develop -c` to use the pinned dev environmen
 Two entry points (SDK enforces `server?: never` / `tui?: never`):
 
 - **Server plugin** (`src/index.ts` → `dist/index.js`): three tools (`worktree_create`, `worktree_merge`, `worktree_remove`), `config` hook (injects a static `external_directory` allow rule for the worktree root), `permission.ask` hook (future-proof), `shell.env` hook, `experimental.chat.system.transform` hook (injects the agent directive from `src/lib/directive.ts` into every session's system prompt). Dependencies (`@opencode-ai/plugin`, `effect`) are bundled into `dist/index.js` so the plugin loads without a `node_modules` tree.
-- **TUI plugin** (`src/tui.tsx` → `dist/tui.js`): `app_bottom` status bar slot
+- **TUI plugin** (`src/tui.tsx` → `dist/tui.js`): `app_bottom` status bar slot. Tracks the worktrees the agent works on by folding the session's `worktree_*` tool-call parts (`src/lib/active-worktree.ts`: create adds, merge/remove removes; multiple concurrent worktrees join with `+`). Two tagged call sources are folded together — a history seed (last 200 messages per session switch) and calls recorded live from `message.part.updated` events (deduped by part ID) — so the seed never wipes event-derived state when the store lags or a re-scan follows `message.part.removed`. State is read via plain functions at slot-render time — do NOT wrap TUI state reads in `createMemo`, they are not reactive and memos cache stale values.
 
 ### Key modules
 
@@ -33,7 +33,8 @@ Two entry points (SDK enforces `server?: never` / `tui?: never`):
 - `src/lib/opencode-dir.ts` — gitignored `.opencode/` detection and copy
 - `src/lib/directive.ts` — system-prompt directive injected via `experimental.chat.system.transform`
 - `src/lib/logger.ts` — `createLogger` helper: wraps `client.app.log` for structured info/warn/error logging from tools
-- `src/lib/title.ts` — session title formatting
+- `src/lib/active-worktree.ts` — pure extraction/fold of the session's `worktree_*` tool-call parts into the currently active worktrees; branch comes from the tool call (live `vcs.branch` belongs to the session's cwd, not the worktree)
+- `src/lib/status-label.ts` — `app_bottom` label formatting: active worktree names joined with `+`; the branch is only appended when the live branch diverges from the worktree name's last dash-segment (fallback `<directory>:<branch>` outside tracked worktrees)
 - `src/tools/` — tool definitions with Zod args (all three tools share `repo_short` + `source_branch` arg names for consistency)
 - `src/types.ts` — `Either<E, T>`, `WorktreeError` union
 
