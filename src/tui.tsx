@@ -45,21 +45,23 @@ const tuiPlugin: TuiPlugin = async (api, options) => {
   let seedCalls: readonly WorktreeToolCall[] = []
   let eventCalls: readonly WorktreeToolCall[] = []
   let seedSession: string | undefined = undefined
+  let seedMessageCount = -1
   let eventSession: string | undefined = undefined
 
-  const seedCallsForSession = (sid: string): void => {
-    const messages: readonly Message[] = api.state.session.messages(sid)
-    const recent = messages.slice(-MAX_SEED_MESSAGES)
+  const seedCallsForSession = (sid: string, messages: readonly Message[]): void => {
     seedCalls = collectWorktreeCalls(
-      recent,
+      messages.slice(-MAX_SEED_MESSAGES),
       (messageID) => api.state.part(messageID) as readonly Part[],
     )
     seedSession = sid
+    seedMessageCount = messages.length
   }
 
   const ensureWorktreeEntries = (sid: string | undefined): readonly ActiveWorktree[] => {
     if (sid === undefined) return []
-    if (seedSession !== sid) seedCallsForSession(sid)
+    const messages: readonly Message[] = api.state.session.messages(sid)
+    if (seedSession !== sid || messages.length !== seedMessageCount)
+      seedCallsForSession(sid, messages)
     if (eventSession !== sid) {
       eventCalls = []
       eventSession = sid

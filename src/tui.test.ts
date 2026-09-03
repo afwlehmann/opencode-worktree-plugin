@@ -57,6 +57,7 @@ type MockApiBundle = {
   registrations: SlotRegistration[]
   handlers: Record<string, (event: never) => void>
   parts: Part[]
+  sessionMessages: Message[]
   replacements: Array<{ render: () => unknown; onClose?: () => void }>
   toasts: ToastInput[]
 }
@@ -76,6 +77,7 @@ const mockApi = ({
   const replacements: Array<{ render: () => unknown; onClose?: () => void }> = []
   const toasts: ToastInput[] = []
   const sessionMessage: Message = { id: "m1", role: "assistant" } as unknown as Message
+  const sessionMessages: Message[] = [sessionMessage]
   const api: MockApi = {
     theme: { current: { textMuted: "#808080" } },
     route: { current: { name: "home" } },
@@ -84,7 +86,7 @@ const mockApi = ({
       vcs: branch === undefined ? undefined : { branch },
       session: {
         status: () => undefined,
-        messages: (sessionID) => (sessionID === "s1" ? [sessionMessage] : []),
+        messages: (sessionID) => (sessionID === "s1" ? sessionMessages : []),
       },
       part: (messageID) => parts.filter((part) => part.messageID === messageID),
     },
@@ -109,7 +111,7 @@ const mockApi = ({
       }) => ({ props }) as never,
     },
   }
-  return { api, registrations, handlers, parts, replacements, toasts }
+  return { api, registrations, handlers, parts, sessionMessages, replacements, toasts }
 }
 
 const activate = async (bundle: MockApiBundle): Promise<void> => {
@@ -404,6 +406,30 @@ describe("tui plugin wiring (mock api)", () => {
 
     expect(renderSlotLabel(bundle)).toContain("integ-feat")
     expect(renderSlotLabel(bundle)).not.toContain("+")
+  })
+
+  it("re-seeds the label when the session history syncs after the first render", async () => {
+    const bundle = mockApi({ branch: "main", directory: "/Users/test/src/git/config" })
+    await activate(bundle)
+    enterSession(bundle, "s1")
+
+    bundle.sessionMessages.length = 0
+    expect(renderSlotLabel(bundle)).toContain("config:main")
+
+    bundle.parts.push(worktreeToolPart("worktree_create", "integ", "feat"))
+    bundle.sessionMessages.push({ id: "m1", role: "assistant" } as unknown as Message)
+    expect(renderSlotLabel(bundle)).toContain("integ-feat")
+  })
+
+  it("keeps event-derived entries across renders that do not change the message count", async () => {
+    const bundle = mockApi({ branch: "main", directory: "/Users/test/src/git/config" })
+    await activate(bundle)
+    enterSession(bundle, "s1")
+
+    dispatchPartUpdated(bundle, worktreeToolPart("worktree_create", "integ", "lag"), false)
+
+    expect(renderSlotLabel(bundle)).toContain("integ-lag")
+    expect(renderSlotLabel(bundle)).toContain("integ-lag")
   })
 
   it("ignores tool parts belonging to other sessions", async () => {
