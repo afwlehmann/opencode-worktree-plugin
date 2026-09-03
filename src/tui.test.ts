@@ -187,11 +187,11 @@ const clickWorktreeLabel = (bundle: MockApiBundle): void => {
   const rendered = (registration.slots["app_bottom"] as () => unknown)()
   const label = findNode(rendered, (node) => {
     const props = (node as { props?: Record<string, unknown> }).props
-    return typeof props?.["onMouseDown"] === "function"
+    return typeof props?.["onMouseUp"] === "function"
   })
   expect(label).toBeDefined()
   const props = (label as { props: Record<string, unknown> }).props
-  ;(props["onMouseDown"] as () => void)()
+  ;(props["onMouseUp"] as () => void)()
 }
 
 describe("tui plugin wiring (mock api)", () => {
@@ -230,6 +230,7 @@ describe("tui plugin wiring (mock api)", () => {
     await activate(bundle)
 
     expect(renderSlotLabel(bundle)).toContain("config:main")
+    expect(renderSlotLabel(bundle)).toContain("▾")
   })
 
   it("renders the worktree label after a worktree_create tool call", async () => {
@@ -240,6 +241,7 @@ describe("tui plugin wiring (mock api)", () => {
     dispatchPartUpdated(bundle, worktreeToolPart("worktree_create", "integ", "feat-e2e"))
 
     expect(renderSlotLabel(bundle)).toContain("integ-feat-e2e")
+    expect(renderSlotLabel(bundle)).toContain("▾")
   })
 
   it("renders the latest worktree with a count for several concurrently active ones", async () => {

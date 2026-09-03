@@ -151,8 +151,8 @@ const tuiPlugin: TuiPlugin = async (api, options) => {
             paddingRight={1}
             flexShrink={0}
           >
-            <text fg={t.textMuted} onMouseDown={openWorktreeDialog}>
-              {currentStatusLabel()}
+            <text fg={t.textMuted} onMouseUp={openWorktreeDialog}>
+              {currentStatusLabel()} ▾
             </text>
             <Show when={currentStatusText()}>
               {(status) => <text fg={t.info}>[{status()}]</text>}
