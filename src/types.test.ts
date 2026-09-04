@@ -10,6 +10,7 @@ import {
   toErrorMessage,
   resolveOptions,
   type MergeStrategy,
+  type PermissionMode,
   type WorktreeError,
 } from "./types.js"
 
@@ -172,6 +173,7 @@ describe("resolveOptions", () => {
     expect(resolveOptions(undefined)).toEqual({
       preferNixDevelop: false,
       mergeStrategy: "ff-only",
+      permissionMode: "all-worktrees",
     })
   })
 
@@ -179,11 +181,21 @@ describe("resolveOptions", () => {
     expect(resolveOptions({ mergeStrategy: "repo-config" })).toEqual({
       preferNixDevelop: false,
       mergeStrategy: "repo-config",
+      permissionMode: "all-worktrees",
     })
   })
 
   it("falls back to ff-only for unrecognized merge strategy values", () => {
     const bogus = "bogus" as unknown as MergeStrategy
     expect(resolveOptions({ mergeStrategy: bogus }).mergeStrategy).toBe("ff-only")
+  })
+
+  it("resolves the pedantic permission mode", () => {
+    expect(resolveOptions({ permissionMode: "pedantic" }).permissionMode).toBe("pedantic")
+  })
+
+  it("falls back to all-worktrees for unrecognized permission mode values", () => {
+    const bogus = "bogus" as unknown as PermissionMode
+    expect(resolveOptions({ permissionMode: bogus }).permissionMode).toBe("all-worktrees")
   })
 })

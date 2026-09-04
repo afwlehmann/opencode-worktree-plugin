@@ -2,19 +2,24 @@ import { Result } from "effect"
 
 export type MergeStrategy = "ff-only" | "repo-config"
 
+export type PermissionMode = "all-worktrees" | "pedantic"
+
 export type PluginOptions = {
   readonly preferNixDevelop?: boolean
   readonly mergeStrategy?: MergeStrategy
+  readonly permissionMode?: PermissionMode
 }
 
 export type ResolvedOptions = {
   readonly preferNixDevelop: boolean
   readonly mergeStrategy: MergeStrategy
+  readonly permissionMode: PermissionMode
 }
 
 export const resolveOptions = (options?: PluginOptions): ResolvedOptions => ({
   preferNixDevelop: options?.preferNixDevelop ?? false,
   mergeStrategy: options?.mergeStrategy === "repo-config" ? "repo-config" : "ff-only",
+  permissionMode: options?.permissionMode === "pedantic" ? "pedantic" : "all-worktrees",
 })
 
 export type WorktreeInfo = {
