@@ -5,6 +5,10 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
     git-hooks.url = "github:cachix/git-hooks.nix";
+    opencode = {
+      url = "github:anomalyco/opencode/v1.18.25";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
@@ -13,6 +17,7 @@
       nixpkgs,
       flake-utils,
       git-hooks,
+      opencode,
     }:
     flake-utils.lib.eachDefaultSystem (
       system:
@@ -83,6 +88,7 @@
               nixd
               typescript-language-server
             ]
+            ++ [ opencode.packages.${system}.default ]
             ++ pre-commit-check.enabledPackages;
         };
       }
