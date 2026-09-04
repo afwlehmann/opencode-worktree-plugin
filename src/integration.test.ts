@@ -1,14 +1,48 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest"
 import * as fs from "node:fs/promises"
-import { existsSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import * as path from "node:path"
 import * as os from "node:os"
-import { spawnSync } from "node:child_process"
+import * as net from "node:net"
+import { spawnSync, spawn } from "node:child_process"
+import { createOpencodeClient } from "@opencode-ai/sdk"
 
 const PLUGIN_ROOT = process.cwd()
 const DIST_INDEX = path.join(PLUGIN_ROOT, "dist", "index.js")
 
 const REQUIRED_ENV = ["OPENAI_API_KEY", "OPENAI_MODEL", "OPENAI_URL"] as const
+
+// Minimal .env loader: the git-ignored repo-local .env holds OPENAI_MODEL,
+// OPENAI_URL, and either OPENAI_API_KEY or OPENAI_API_KEY_FILE pointing at a
+// key file on disk (no clear-text secrets in the repo).
+const loadEnvFile = (envPath: string): void => {
+  if (!existsSync(envPath)) return
+  readFileSync(envPath, "utf-8")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line !== "" && !line.startsWith("#"))
+    .map((line) => {
+      const separator = line.indexOf("=")
+      return separator > 0
+        ? ([line.slice(0, separator), line.slice(separator + 1)] as const)
+        : undefined
+    })
+    .filter((entry): entry is readonly [string, string] => entry !== undefined)
+    .filter(([key]) => process.env[key] === undefined)
+    .forEach(([key, value]) => {
+      process.env[key] = value
+    })
+}
+
+const resolveApiKeyFromFile = (): void => {
+  if (process.env["OPENAI_API_KEY"] !== undefined) return
+  const keyFile = process.env["OPENAI_API_KEY_FILE"]
+  if (keyFile === undefined || !existsSync(keyFile)) return
+  process.env["OPENAI_API_KEY"] = readFileSync(keyFile, "utf-8").trim()
+}
+
+loadEnvFile(path.join(PLUGIN_ROOT, ".env"))
+resolveApiKeyFromFile()
 
 const hasOpencode = (): boolean =>
   spawnSync("opencode", ["--version"], { stdio: "pipe" }).status === 0
@@ -89,18 +123,32 @@ describe.skipIf(!canRun)("integration (opencode run)", () => {
     await fs.mkdir(repoPath, { recursive: true })
     await fs.writeFile(path.join(repoPath, "README.md"), "hello\n")
     initGitRepo(repoPath)
+    await writeConfig()
+  })
+
+  const writeConfig = async (
+    overrides: {
+      pluginOptions?: Record<string, unknown>
+      permission?: Record<string, unknown>
+    } = {},
+  ): Promise<void> => {
+    const pluginEntry =
+      overrides.pluginOptions === undefined
+        ? [`file://${PLUGIN_ROOT}`]
+        : [[`file://${PLUGIN_ROOT}`, overrides.pluginOptions]]
+    const permission = overrides.permission ?? {
+      "*": "allow",
+      bash: { "*": "allow" },
+      edit: { "*": "allow" },
+      external_directory: { "/**": "deny" },
+    }
     await fs.writeFile(
       path.join(repoPath, "opencode.json"),
       JSON.stringify({
         $schema: "https://opencode.ai/config.json",
-        plugin: [`file://${PLUGIN_ROOT}`],
+        plugin: pluginEntry,
         default_agent: "build",
-        permission: {
-          "*": "allow",
-          bash: { "*": "allow" },
-          edit: { "*": "allow" },
-          external_directory: { "/**": "deny" },
-        },
+        permission,
         provider: {
           "openai-compatible": {
             name: "Integration Test",
@@ -117,14 +165,20 @@ describe.skipIf(!canRun)("integration (opencode run)", () => {
         model: "openai-compatible/model",
       }),
     )
-  })
+  }
 
   afterEach(async () => {
     git(repoPath, "worktree", "prune")
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
   })
 
-  const runOpencode = (prompt: string, timeoutMs = 120000) => {
+  // opencode resolves its project directory from the PWD env var, and
+  // node's spawn never updates PWD for the child — a stale PWD (the vitest
+  // process's own cwd, i.e. this repo) makes the spawned opencode treat this
+  // repo as its project instead of the fixture. The previous PATH wrapper (a
+  // shell script) masked this because its interpreter resets PWD to the real
+  // cwd; the pinned unwrapped binary does not.
+  const isolatedEnv = (): NodeJS.ProcessEnv => {
     const env: NodeJS.ProcessEnv = { ...process.env }
     delete env["XDG_STATE_HOME"]
     delete env["XDG_CONFIG_HOME"]
@@ -136,7 +190,11 @@ describe.skipIf(!canRun)("integration (opencode run)", () => {
     env["XDG_CONFIG_HOME"] = xdgConfigHome
     env["XDG_DATA_HOME"] = xdgDataHome
     env["OPENCODE_DISABLE_AUTOUPDATE"] = "1"
+    env["PWD"] = repoPath
+    return env
+  }
 
+  const runOpencode = (prompt: string, timeoutMs = 120000) => {
     const result = spawnSync(
       "opencode",
       ["run", "--auto", "--print-logs", "--log-level", "INFO", prompt],
@@ -144,7 +202,7 @@ describe.skipIf(!canRun)("integration (opencode run)", () => {
         cwd: repoPath,
         encoding: "utf-8",
         timeout: timeoutMs,
-        env,
+        env: isolatedEnv(),
       },
     )
     return {
@@ -152,6 +210,75 @@ describe.skipIf(!canRun)("integration (opencode run)", () => {
       stderr: result.stderr ?? "",
       exitCode: result.status ?? 1,
       output: (result.stdout ?? "") + (result.stderr ?? ""),
+    }
+  }
+
+  const waitUntil = async (check: () => Promise<boolean>, timeoutMs: number): Promise<boolean> => {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      if (await check()) return true
+      await new Promise((resolve) => setTimeout(resolve, 250))
+    }
+    return await check()
+  }
+
+  const startOpencodeServe = async (): Promise<{
+    readonly port: number
+    readonly output: () => string
+    readonly stop: () => Promise<void>
+  }> => {
+    const port = await new Promise<number>((resolve, reject) => {
+      const probe = net.createServer()
+      probe.once("error", reject)
+      probe.listen(0, "127.0.0.1", () => {
+        const address = probe.address() as net.AddressInfo
+        probe.close(() => resolve(address.port))
+      })
+    })
+
+    const child = spawn(
+      "opencode",
+      [
+        "serve",
+        "--port",
+        String(port),
+        "--hostname",
+        "127.0.0.1",
+        "--print-logs",
+        "--log-level",
+        "INFO",
+      ],
+      { cwd: repoPath, env: isolatedEnv(), stdio: ["ignore", "pipe", "pipe"] },
+    )
+    let serverOutput = ""
+    child.stdout.on("data", (chunk: Buffer) => {
+      serverOutput += chunk.toString()
+    })
+    child.stderr.on("data", (chunk: Buffer) => {
+      serverOutput += chunk.toString()
+    })
+
+    const ready = await waitUntil(async () => {
+      try {
+        const response = await fetch(
+          `http://127.0.0.1:${port}/session/status?directory=${encodeURIComponent(repoPath)}`,
+        )
+        return response.ok
+      } catch {
+        return false
+      }
+    }, 30000)
+    if (!ready) throw new Error(`opencode serve did not become ready:\n${serverOutput}`)
+
+    return {
+      port,
+      output: () => serverOutput,
+      stop: () =>
+        new Promise<void>((resolve) => {
+          child.once("exit", () => resolve())
+          child.kill("SIGTERM")
+          setTimeout(() => child.kill("SIGKILL"), 5000).unref()
+        }),
     }
   }
 
@@ -274,6 +401,89 @@ Do not fix or work around the arguments — call the tool exactly as instructed.
 
       expect(existsSync(wtPath("integ", "feat-ref"))).toBe(false)
       expect(git(repoPath, "rev-parse", "--verify", "feat-ref").status).not.toBe(0)
+    },
+  )
+
+  it(
+    "pedantic mode transparently auto-approves external_directory asks for active worktrees",
+    { timeout: 240000 },
+    async () => {
+      await writeConfig({
+        pluginOptions: { permissionMode: "pedantic" },
+        permission: {
+          bash: { "*": "allow" },
+          edit: { "*": "allow" },
+          read: "allow",
+          glob: "allow",
+          grep: "allow",
+          external_directory: { "*": "ask" },
+        },
+      })
+
+      // `opencode run` resolves permission asks itself (approves with --auto,
+      // auto-rejects without), so the plugin's transparent approval can only
+      // be observed against a bare server where asks actually wait.
+      const server = await startOpencodeServe()
+      try {
+        const client = createOpencodeClient({
+          baseUrl: `http://127.0.0.1:${server.port}`,
+          directory: repoPath,
+        })
+
+        const created = await client.session.create({ body: {} })
+        if (created.error) throw new Error(`session create failed: ${String(created.error)}`)
+        const sessionID = created.data.id
+
+        const prompted = await client.session.promptAsync({
+          path: { id: sessionID },
+          body: {
+            agent: "build",
+            parts: [
+              {
+                type: "text",
+                text: [
+                  "Do these steps in order:",
+                  "1. Call worktree_create with repo_short='integ', source_branch='feat-pedantic', target_branch='main'.",
+                  "2. Use the Write tool to create a file at the returned worktree path plus '/pedantic.txt' with content 'pedantic'.",
+                  "3. Use the Bash tool to run: cd <worktree_path> && git add -A && git commit -m 'add pedantic'.",
+                  "4. Call worktree_merge with repo_short='integ', source_branch='feat-pedantic', target_branch='main'.",
+                  "5. Report whether each step succeeded.",
+                ].join("\n"),
+              },
+            ],
+          },
+        })
+        if (prompted.error) throw new Error(`prompt_async failed: ${String(prompted.error)}`)
+
+        // /session/status only lists busy/retry sessions — an idle session is
+        // removed from the map (SessionStatus.set deletes on "idle"), so
+        // "idle" is observed as the session disappearing from the response.
+        const started = await waitUntil(async () => {
+          const status = await client.session.status()
+          if (status.error) return false
+          return status.data[sessionID] !== undefined
+        }, 30000)
+        if (!started) throw new Error("session never started processing")
+
+        const finished = await waitUntil(async () => {
+          const status = await client.session.status()
+          if (status.error) return false
+          return status.data[sessionID] === undefined
+        }, 180000)
+        if (!finished)
+          throw new Error("session did not go idle — a permission ask may be unanswered")
+
+        expect(server.output()).toContain("pedantic: auto-approved external_directory")
+
+        expect(existsSync(wtPath("integ", "feat-pedantic"))).toBe(false)
+        expect(git(repoPath, "rev-parse", "--verify", "feat-pedantic").status).not.toBe(0)
+        expect(existsSync(path.join(repoPath, "pedantic.txt"))).toBe(true)
+        const content = await fs.readFile(path.join(repoPath, "pedantic.txt"), "utf-8")
+        expect(content.trim()).toBe("pedantic")
+        expect(git(repoPath, "log", "--oneline").stdout).toContain("add pedantic")
+      } finally {
+        await server.stop()
+      }
     },
   )
 })

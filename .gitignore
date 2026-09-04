@@ -7,3 +7,4 @@ opencode.jsonc
 .idea/
 .vscode/
 *.log
+.env

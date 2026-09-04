@@ -77,6 +77,21 @@ nix develop -c npm test        # unit + integration tests
 nix develop -c npm run build   # dist/index.js + dist/tui.js
 ```
 
+The devshell ships a pinned, unwrapped opencode binary (currently v1.18.25), so
+integration tests run against the same version the plugin targets — and any
+global config a custom wrapper might inject stays out. Outside nix, `opencode`
+on PATH must be the real binary, not a wrapper.
+
+Integration tests also need a git-ignored `.env` in the repo root:
+
+```bash
+OPENAI_MODEL=<model id>
+OPENAI_URL=<openai-compatible base url>
+# API key: a file on disk (no clear-text secret) or the key itself.
+# A directly set OPENAI_API_KEY (env or .env) wins over the file.
+OPENAI_API_KEY_FILE=/path/to/key/file
+```
+
 ## License
 
 MIT
