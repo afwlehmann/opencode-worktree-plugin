@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest"
-import { addWorktreeRootAllow, isInsideWorktreeRoot } from "./permissions.js"
+import {
+  addWorktreeRootAllow,
+  isInsideWorktreeRoot,
+  isInsideAnyRoot,
+  activeWorktreePaths,
+} from "./permissions.js"
 
 const root = "/home/user/.local/state/opencode/worktrees"
 
@@ -32,6 +37,29 @@ describe("isInsideWorktreeRoot", () => {
   it("rejects unrelated paths", () => {
     expect(isInsideWorktreeRoot("/home/user/src/git/config", root)).toBe(false)
     expect(isInsideWorktreeRoot("", root)).toBe(false)
+  })
+})
+
+describe("isInsideAnyRoot", () => {
+  it("matches when any root contains the candidate", () => {
+    expect(isInsideAnyRoot(`${root}/config-feat`, ["/unrelated", root])).toBe(true)
+  })
+
+  it("rejects when no root contains the candidate", () => {
+    expect(isInsideAnyRoot(`${root}-evil/config-feat`, [root, "/resolved/root"])).toBe(false)
+  })
+})
+
+describe("activeWorktreePaths", () => {
+  it("keeps only paths inside the plugin roots", () => {
+    const repoPath = "/home/user/src/git/config"
+    expect(
+      activeWorktreePaths([repoPath, `${root}/config-feat`, "/tmp/elsewhere"], [root]),
+    ).toEqual([`${root}/config-feat`])
+  })
+
+  it("returns an empty list when nothing matches", () => {
+    expect(activeWorktreePaths(["/home/user/src/git/config"], [root])).toEqual([])
   })
 })
 

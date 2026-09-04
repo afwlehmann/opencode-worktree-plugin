@@ -10,7 +10,9 @@ The main point: the agent drives the whole worktree lifecycle itself — it deci
 
 - **Four agent tools** — `worktree_create`, `worktree_merge`, `worktree_remove`, and `worktree_list` (rediscover existing worktrees with their branch and clean/uncommitted status, e.g. after compaction). Worktrees live under `${XDG_STATE_HOME:-~/.local/state}/opencode/worktrees/<repo>-<branch>`.
 - **Safety-first git** — fast-forward-only merges by default (or the repository's own `merge.ff` config via the `mergeStrategy` option), branch deletion only after a verified merge, refusal to remove worktrees with uncommitted changes, never `--force`.
-- **Permission-aware** — the worktree root is statically allowed for `external_directory`, so the agent can read and edit inside worktrees without prompts, even under a catch-all deny.
+- **Permission-aware** — two `permissionMode` strategies for `external_directory` access inside the managed worktrees:
+  - `"all-worktrees"` (default) — at plugin init the `config` hook adds a single static allow for the entire worktrees parent directory (`${XDG_STATE_HOME:-~/.local/state}/opencode/worktrees/**`). There are no per-worktree permission entries that come and go — every managed worktree sits under that one prefix rule, so the agent can read and edit inside worktrees without prompts, even under a catch-all deny. A `permission.ask` hook backstop allows any path inside the same roots should a prompt still occur.
+  - `"pedantic"` — no static allow is added. Instead the plugin watches every `external_directory` permission request and transparently approves it — without prompting the user — only when the requested paths are inside a currently **active** plugin worktree (derived from git at ask time). Access is revoked automatically once a worktree is merged or removed. This keeps `external_directory` at `ask` (or stricter except a deny) for everything else, so unrelated directories outside the managed worktrees still prompt normally. Notes: requires opencode ≥ 1.18 (the permission-reply API the plugin uses); an explicit config `deny` rule always short-circuits before the plugin sees the request, so pedantic mode cannot rescue a catch-all deny — use `all-worktrees` for that; and transparent approval applies to interactive sessions — `opencode run` resolves permission asks itself (approves with `--auto`, auto-rejects otherwise) before the plugin can.
 - **Single-session** — the agent keeps working in _your_ session; worktrees are just directories it edits. A TUI status bar tracks the active worktrees (e.g. `config-fix (3)`); clicking it lists their absolute paths with clipboard copy.
 - **Agent directive** — a system-prompt hook tells agents to prefer these tools over raw git and explains what raw git skips.
 
@@ -52,13 +54,18 @@ The plugin ships as two entry points — `opencode-worktree-plugin` (server) and
 - `mergeStrategy` (default `"ff-only"`) — how `worktree_merge` folds a worktree branch back:
   - `"ff-only"` — fast-forward only, no merge commits; if the branches have diverged, rebase the worktree branch onto the target first.
   - `"repo-config"` — follow the respective git repository's `merge.ff` configuration: unset/`true` fast-forwards when possible and creates a merge commit otherwise, `false` always creates a merge commit, `only` requires a fast-forward. Merge commits for a target branch that is not checked out are built ref-only via git plumbing (`merge-tree`/`commit-tree`/`update-ref`), so no working copy is touched; conflicted working-copy merges are rolled back with `git merge --abort`.
+- `permissionMode` (default `"all-worktrees"`) — how `external_directory` access inside the managed worktrees is granted:
+  - `"all-worktrees"` — a static `external_directory` allow for the entire worktrees parent directory (see above). Works even under a catch-all deny, but also covers stale directories under the root that are no longer active worktrees.
+  - `"pedantic"` — no static allow; the plugin transparently auto-approves `external_directory` requests (no user prompts) only when every requested path lies inside a currently active plugin worktree, and approves persistently ("always") only when the suggested persistent patterns are worktree-scoped as well. Anything else — including directories that merely sit under the worktrees root but are not live worktrees — falls back to the normal prompt/ask behavior.
 
 To opt in, pass it where the plugin is registered:
 
 ```jsonc
 // opencode.json
 {
-  "plugin": [["opencode-worktree-plugin", { "mergeStrategy": "repo-config" }]],
+  "plugin": [
+    ["opencode-worktree-plugin", { "mergeStrategy": "repo-config", "permissionMode": "pedantic" }],
+  ],
 }
 ```
 

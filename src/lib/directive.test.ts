@@ -1,46 +1,66 @@
 import { describe, it, expect } from "vitest"
-import { WORKTREE_DIRECTIVE } from "./directive.js"
+import { worktreeDirective } from "./directive.js"
 
-describe("WORKTREE_DIRECTIVE", () => {
-  it("is a non-empty string", () => {
-    expect(typeof WORKTREE_DIRECTIVE).toBe("string")
-    expect(WORKTREE_DIRECTIVE.length).toBeGreaterThan(0)
+const allWorktrees = worktreeDirective("all-worktrees")
+const pedantic = worktreeDirective("pedantic")
+
+describe("worktreeDirective", () => {
+  it("is a non-empty string for every mode", () => {
+    for (const directive of [allWorktrees, pedantic]) {
+      expect(typeof directive).toBe("string")
+      expect(directive.length).toBeGreaterThan(0)
+    }
   })
 
   it("names all four tools", () => {
-    expect(WORKTREE_DIRECTIVE).toContain("worktree_create")
-    expect(WORKTREE_DIRECTIVE).toContain("worktree_merge")
-    expect(WORKTREE_DIRECTIVE).toContain("worktree_remove")
-    expect(WORKTREE_DIRECTIVE).toContain("worktree_list")
+    for (const directive of [allWorktrees, pedantic]) {
+      expect(directive).toContain("worktree_create")
+      expect(directive).toContain("worktree_merge")
+      expect(directive).toContain("worktree_remove")
+      expect(directive).toContain("worktree_list")
+    }
   })
 
   it("forbids raw git worktree commands", () => {
-    expect(WORKTREE_DIRECTIVE).toContain("git worktree add")
-    expect(WORKTREE_DIRECTIVE).toContain("git worktree remove")
-    expect(WORKTREE_DIRECTIVE).toContain("git merge <branch>")
-    expect(WORKTREE_DIRECTIVE).toContain("git branch -d")
+    for (const directive of [allWorktrees, pedantic]) {
+      expect(directive).toContain("git worktree add")
+      expect(directive).toContain("git worktree remove")
+      expect(directive).toContain("git merge <branch>")
+      expect(directive).toContain("git branch -d")
+    }
   })
 
   it("explains the merge safety handling", () => {
-    expect(WORKTREE_DIRECTIVE).toContain("merge safety")
-    expect(WORKTREE_DIRECTIVE).toContain("merge.ff")
+    for (const directive of [allWorktrees, pedantic]) {
+      expect(directive).toContain("merge safety")
+      expect(directive).toContain("merge.ff")
+    }
   })
 
-  it("explains the permission handling", () => {
-    expect(WORKTREE_DIRECTIVE).toContain("external_directory")
-    expect(WORKTREE_DIRECTIVE).toContain("config hook")
+  it("explains the permission handling per mode", () => {
+    expect(allWorktrees).toContain("external_directory")
+    expect(allWorktrees).toContain("config hook")
+    expect(pedantic).toContain("external_directory")
+    expect(pedantic).toContain("auto-approves")
+    expect(pedantic).toContain("active worktrees")
   })
 
   it("mentions the .opencode/ copy", () => {
-    expect(WORKTREE_DIRECTIVE).toContain(".opencode/")
+    for (const directive of [allWorktrees, pedantic]) {
+      expect(directive).toContain(".opencode/")
+    }
   })
 
   it("allows raw git fallback when plugin is not loaded", () => {
-    expect(WORKTREE_DIRECTIVE).toContain("plugin not loaded")
-    expect(WORKTREE_DIRECTIVE).toContain("fall back")
+    for (const directive of [allWorktrees, pedantic]) {
+      expect(directive).toContain("plugin not loaded")
+      expect(directive).toContain("fall back")
+    }
   })
 
   it("uses MUST for the strict directive", () => {
-    expect(WORKTREE_DIRECTIVE).toContain("MUST")
+    for (const directive of [allWorktrees, pedantic]) {
+      expect(directive).toContain("MUST")
+    }
   })
 })

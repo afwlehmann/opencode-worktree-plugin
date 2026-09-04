@@ -46,9 +46,11 @@ export const createWorktreeTool = (deps: CreateWorktreeDeps) =>
       "worktree under ${XDG_STATE_HOME}/opencode/worktrees/<repo_short>-<source_branch>, " +
       "branching off from the target branch (default: main). Do NOT run " +
       "`git worktree add` manually — this tool handles side effects that raw git " +
-      "silently skips: (0) external_directory permission — the plugin's config " +
-      "hook statically allows access to the entire worktree root, so you can " +
-      "read and edit files in the worktree without permission prompts or denials. " +
+      "silently skips: (0) external_directory permission — the plugin " +
+      "transparently grants access to the worktrees it manages (the whole " +
+      "worktree root by default, or only active plugin worktrees in pedantic " +
+      "permission mode), so you can read and edit files in the worktree " +
+      "without permission prompts or denials. " +
       "With raw git, a worktree created outside that root requires per-path " +
       "external_directory approval. (1) .opencode/ copy — detects a gitignored/" +
       "untracked .opencode/ directory in the source repo and prompts the user " +
@@ -207,7 +209,7 @@ export const createWorktreeTool = (deps: CreateWorktreeDeps) =>
           `  Git:    ${resolvedGitCmd.join(" ")}\n` +
           `  Total worktrees: ${worktreeCount}\n\n` +
           `The agent can now work in ${worktreePath}. ` +
-          `External_directory access is allowed via the plugin's config hook.\n` +
+          `External_directory access is granted by the plugin for its worktrees.\n` +
           `To merge the worktree back, use worktree_merge with the same repo_short and source_branch.`,
       }
     },

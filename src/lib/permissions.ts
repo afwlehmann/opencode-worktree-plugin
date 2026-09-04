@@ -5,6 +5,14 @@ export const isInsideWorktreeRoot = (candidate: string, root: string): boolean =
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))
 }
 
+export const isInsideAnyRoot = (candidate: string, roots: readonly string[]): boolean =>
+  roots.some((root) => isInsideWorktreeRoot(candidate, root))
+
+export const activeWorktreePaths = (
+  worktreePaths: readonly string[],
+  roots: readonly string[],
+): readonly string[] => worktreePaths.filter((worktreePath) => isInsideAnyRoot(worktreePath, roots))
+
 export const addWorktreeRootAllow = (
   config: { permission?: Record<string, unknown> },
   worktreeRoots: readonly string[],
