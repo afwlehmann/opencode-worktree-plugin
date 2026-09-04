@@ -36,7 +36,7 @@
           pname = "opencode-worktree-plugin";
           version = (lib.importJSON ./package.json).version;
           src = ./.;
-          npmDepsHash = "sha256-WbVgi+1V2kmyjbqVtRRJbQT/nzEnbJT2dsvJt0Wj8Jw=";
+          npmDepsHash = "sha256-ys3XDj4C29Z+2ndpPdwn8TfzGczHyy34/O9F3vfeIU0=";
           npmDepsFetcherVersion = 2;
           makeCacheWritable = true;
           npmFlags = [ "--legacy-peer-deps" ];

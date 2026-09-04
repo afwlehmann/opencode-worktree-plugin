@@ -1,7 +1,7 @@
 {
   "name": "opencode-worktree-plugin",
   "version": "0.6.2",
-  "description": "Git worktree management plugin for opencode \u2014 create, merge, and remove worktrees with dynamic permissions and TUI status bar",
+  "description": "Git worktree management plugin for opencode — create, merge, and remove worktrees with dynamic permissions and TUI status bar",
   "type": "module",
   "license": "MIT",
   "author": "Alexander Lehmann <afwlehmann@googlemail.com>",
@@ -66,7 +66,7 @@
     "eslint-config-prettier": "^10.0.1",
     "eslint-plugin-vitest": "^0.5.0",
     "lint-staged": "^15.4.0",
-    "prettier": "^3.4.2",
+    "prettier": "3.8.3",
     "simple-git-hooks": "^2.11.1",
     "solid-js": "^1.9.12",
     "typescript": "^5.7.3",

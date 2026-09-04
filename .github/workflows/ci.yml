@@ -27,7 +27,7 @@ jobs:
       - run: nix develop --command npx tsc --noEmit
       - run: nix develop --command npx vitest run --exclude src/integration.test.ts
       - run: nix develop --command npx vite build
-      - run: nix develop --command nix build .#default --print-build-logs
+      - run: nix flake check --print-build-logs
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')

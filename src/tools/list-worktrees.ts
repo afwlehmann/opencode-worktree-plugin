@@ -126,12 +126,14 @@ export const listWorktreesTool = (deps: ListWorktreesDeps) =>
       const listed: readonly ListedWorktree[] = await Promise.all(
         entries
           .filter((entry) => args.all === true || isManaged(entry.path))
-          .map(async (entry): Promise<ListedWorktree> => ({
-            entry,
-            status: await worktreeStatus(deps.spawn, gitCmd, entry.path, entry.bare === true),
-            managed: isManaged(entry.path),
-            main: entry.path === mainPath,
-          })),
+          .map(
+            async (entry): Promise<ListedWorktree> => ({
+              entry,
+              status: await worktreeStatus(deps.spawn, gitCmd, entry.path, entry.bare === true),
+              managed: isManaged(entry.path),
+              main: entry.path === mainPath,
+            }),
+          ),
       )
 
       await log.log(
