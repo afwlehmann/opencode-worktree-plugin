@@ -39,6 +39,13 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+      - uses: DeterminateSystems/nix-installer-action@v22
+        with:
+          flakehub: false
+      - uses: DeterminateSystems/magic-nix-cache-action@v14
+      - run: nix develop --command npm ci
+      - run: nix develop --command npx vite build
+      - run: nix develop --command npm pack --ignore-scripts
       - env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release delete "${{ github.ref_name }}" --yes || true
@@ -48,3 +55,4 @@ jobs:
           name: ${{ github.ref_name }}
           generate_release_notes: true
           make_latest: true
+          files: opencode-worktree-plugin-*.tgz
