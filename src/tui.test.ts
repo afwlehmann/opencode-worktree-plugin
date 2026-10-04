@@ -1,15 +1,24 @@
-import { describe, it, expect, vi, beforeEach } from "vitest"
+import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from "vitest"
 import * as path from "node:path"
 import * as os from "node:os"
 import type { Message, Part } from "@opencode-ai/sdk/v2"
 import type { TuiPluginModule } from "@opencode-ai/plugin/tui"
 import { copyToClipboard } from "./lib/clipboard.js"
+import { latestWorktree } from "./lib/worktree-recency.js"
+import { defaultExists } from "./lib/git-env.js"
+import { resolveWorktreeRoot } from "./lib/paths.js"
+import type { PluginOptions } from "./types.js"
 import { left, right } from "./types.js"
 import tuiModule from "./tui.js"
 
 vi.mock("./lib/clipboard.js", () => ({ copyToClipboard: vi.fn() }))
+vi.mock("./lib/worktree-recency.js", () => ({ latestWorktree: vi.fn(), defaultStat: vi.fn() }))
 
 const mockedCopy = vi.mocked(copyToClipboard)
+const mockedLatest = vi.mocked(latestWorktree)
+
+const TEST_STATE_HOME = path.join(os.tmpdir(), "wt-tui-test-state")
+let worktreeRoot = ""
 
 type RenderedNode = { tag?: unknown; props?: Record<string, unknown>; children?: unknown[] }
 ;(globalThis as Record<string, unknown>)["React"] = {
@@ -26,20 +35,21 @@ type DialogOption = { title: string; value: string; description: string }
 
 type ToastInput = { variant?: string; title?: string; message: string }
 
+type MockSession = { directory: string }
+
 type MockApi = {
   theme: { current: Record<string, string> }
-  route: { current: { name: string; params?: Record<string, unknown> } }
   state: {
     path: { directory: string }
-    vcs: { branch?: string } | undefined
     session: {
-      status: () => undefined
+      get: (sessionID: string) => MockSession | undefined
       messages: (sessionID: string) => readonly Message[]
     }
     part: (messageID: string) => readonly Part[]
   }
   slots: { register: (registration: SlotRegistration) => void }
   event: { on: (name: string, handler: (event: never) => void) => void }
+  client: { app: { log: (input: unknown) => Promise<void> } }
   ui: {
     dialog: { replace: (render: () => unknown, onClose?: () => void) => void; clear: () => void }
     toast: (input: ToastInput) => void
@@ -60,48 +70,56 @@ type MockApiBundle = {
   sessionMessages: Message[]
   replacements: Array<{ render: () => unknown; onClose?: () => void }>
   toasts: ToastInput[]
+  logInputs: unknown[]
 }
 
 type MockApiOptions = {
-  branch?: string
   directory?: string
+  sessions?: Record<string, MockSession>
 }
 
 const mockApi = ({
-  branch,
   directory = "/tmp/wt-wiring-does-not-exist",
+  sessions = {},
 }: MockApiOptions = {}): MockApiBundle => {
   const registrations: SlotRegistration[] = []
   const handlers: Record<string, (event: never) => void> = {}
   const parts: Part[] = []
   const replacements: Array<{ render: () => unknown; onClose?: () => void }> = []
   const toasts: ToastInput[] = []
+  const logInputs: unknown[] = []
   const sessionMessage: Message = { id: "m1", role: "assistant" } as unknown as Message
   const sessionMessages: Message[] = [sessionMessage]
   const api: MockApi = {
-    theme: { current: { textMuted: "#808080" } },
-    route: { current: { name: "home" } },
+    theme: { current: { accent: "#00aaff", text: "#eeeeee" } },
     state: {
       path: { directory },
-      vcs: branch === undefined ? undefined : { branch },
       session: {
-        status: () => undefined,
-        messages: (sessionID) => (sessionID === "s1" ? sessionMessages : []),
+        get: (sessionID: string) => sessions[sessionID],
+        messages: (sessionID: string) => (sessionID === "s1" ? sessionMessages : []),
       },
-      part: (messageID) => parts.filter((part) => part.messageID === messageID),
+      part: (messageID: string) => parts.filter((part) => part.messageID === messageID),
     },
-    slots: { register: (registration) => registrations.push(registration) },
-    event: { on: (name, handler) => (handlers[name] = handler) },
+    slots: { register: (registration: SlotRegistration) => registrations.push(registration) },
+    event: { on: (name: string, handler: (event: never) => void) => (handlers[name] = handler) },
+    client: {
+      app: {
+        log: (input: unknown) => {
+          logInputs.push(input)
+          return Promise.resolve()
+        },
+      },
+    },
     ui: {
       dialog: {
-        replace: (render, onClose) => {
+        replace: (render: () => unknown, onClose?: () => void) => {
           replacements.push({ render, onClose })
         },
         clear: () => {
           replacements.length = 0
         },
       },
-      toast: (input) => {
+      toast: (input: ToastInput) => {
         toasts.push(input)
       },
       DialogSelect: (props: {
@@ -111,16 +129,12 @@ const mockApi = ({
       }) => ({ props }) as never,
     },
   }
-  return { api, registrations, handlers, parts, sessionMessages, replacements, toasts }
+  return { api, registrations, handlers, parts, sessionMessages, replacements, toasts, logInputs }
 }
 
-const activate = async (bundle: MockApiBundle): Promise<void> => {
+const activate = async (bundle: MockApiBundle, options?: PluginOptions): Promise<void> => {
   const module = tuiModule as TuiPluginModule
-  await module.tui(bundle.api as never, undefined)
-}
-
-const enterSession = (bundle: MockApiBundle, sessionID: string): void => {
-  bundle.api.route.current = { name: "session", params: { sessionID } }
+  await module.tui(bundle.api as never, (options ?? undefined) as never)
 }
 
 let partCounter = 0
@@ -147,6 +161,10 @@ const dispatchPartUpdated = (bundle: MockApiBundle, part: Part, storeIt = true):
   bundle.handlers["message.part.updated"]?.({ properties: { part } } as never)
 }
 
+const dispatchPartRemoved = (bundle: MockApiBundle, sessionID: string): void => {
+  bundle.handlers["message.part.removed"]?.({ properties: { sessionID } } as never)
+}
+
 const collectStrings = (node: unknown): readonly string[] => {
   if (typeof node === "string") return [node]
   if (typeof node === "number") return [String(node)]
@@ -158,290 +176,534 @@ const collectStrings = (node: unknown): readonly string[] => {
   return []
 }
 
-const renderSlotLabel = (bundle: MockApiBundle): string => {
-  const registration = bundle.registrations[0]
-  expect(registration).toBeDefined()
-  const render = registration.slots["app_bottom"]
-  expect(typeof render).toBe("function")
-  const rendered = (render as () => unknown)()
-  return collectStrings(rendered).join(" ")
-}
-
-const findNode = (node: unknown, predicate: (node: object) => boolean): object | undefined => {
-  if (Array.isArray(node)) {
-    for (const child of node) {
-      const found = findNode(child, predicate)
-      if (found !== undefined) return found
-    }
-    return undefined
-  }
+const findAllNodes = (node: unknown, predicate: (node: object) => boolean): object[] => {
+  if (Array.isArray(node)) return node.flatMap((child) => findAllNodes(child, predicate))
   if (typeof node === "object" && node !== null) {
-    if (predicate(node)) return node
+    const self = predicate(node) ? [node] : []
     const children = (node as { children?: unknown }).children
-    return children === undefined ? undefined : findNode(children, predicate)
+    return [...self, ...(children === undefined ? [] : findAllNodes(children, predicate))]
   }
-  return undefined
+  return []
 }
 
-const clickWorktreeLabel = (bundle: MockApiBundle): void => {
-  const registration = bundle.registrations[0]
+const findNode = (node: unknown, predicate: (node: object) => boolean): object | undefined =>
+  findAllNodes(node, predicate)[0]
+
+const registrationWith = (bundle: MockApiBundle, slot: string): SlotRegistration => {
+  const registration = bundle.registrations.find((candidate) => slot in candidate.slots)
   expect(registration).toBeDefined()
-  const rendered = (registration.slots["app_bottom"] as () => unknown)()
-  const label = findNode(rendered, (node) => {
+  return registration as SlotRegistration
+}
+
+const renderSessionChip = (bundle: MockApiBundle, sessionID = "s1"): unknown =>
+  (
+    registrationWith(bundle, "session_prompt_right").slots["session_prompt_right"] as (
+      ctx: unknown,
+      props: { session_id: string },
+    ) => unknown
+  )(undefined, { session_id: sessionID })
+
+const renderHomeChip = (bundle: MockApiBundle): unknown =>
+  (registrationWith(bundle, "home_prompt_right").slots["home_prompt_right"] as () => unknown)()
+
+const renderSidebarSection = (bundle: MockApiBundle, sessionID = "s1"): unknown =>
+  (
+    registrationWith(bundle, "sidebar_content").slots["sidebar_content"] as (
+      ctx: unknown,
+      props: { session_id: string },
+    ) => unknown
+  )(undefined, { session_id: sessionID })
+
+const chipLabel = (bundle: MockApiBundle, sessionID = "s1"): string =>
+  collectStrings(renderSessionChip(bundle, sessionID)).join(" ")
+
+const sidebarLabel = (bundle: MockApiBundle, sessionID = "s1"): string =>
+  collectStrings(renderSidebarSection(bundle, sessionID)).join(" ")
+
+const flush = async (): Promise<void> => {
+  await new Promise((resolve) => setTimeout(resolve, 0))
+}
+
+const clickNode = (
+  bundle: MockApiBundle,
+  rendered: unknown,
+  predicate: (node: object) => boolean,
+): void => {
+  const node = findNode(rendered, predicate)
+  expect(node).toBeDefined()
+  const props = (node as { props: Record<string, unknown> }).props
+  ;(props?.["onMouseUp"] as () => void)()
+}
+
+const clickWorktreeChip = (bundle: MockApiBundle, sessionID = "s1"): void => {
+  clickNode(bundle, renderSessionChip(bundle, sessionID), (node) => {
     const props = (node as { props?: Record<string, unknown> }).props
     return typeof props?.["onMouseUp"] === "function"
   })
-  expect(label).toBeDefined()
-  const props = (label as { props: Record<string, unknown> }).props
-  ;(props["onMouseUp"] as () => void)()
 }
 
 describe("tui plugin wiring (mock api)", () => {
+  beforeAll(async () => {
+    process.env["XDG_STATE_HOME"] = TEST_STATE_HOME
+    worktreeRoot = await resolveWorktreeRoot(defaultExists)
+  })
+
   beforeEach(() => {
+    process.env["XDG_STATE_HOME"] = TEST_STATE_HOME
     mockedCopy.mockReset()
     mockedCopy.mockResolvedValue(right(undefined))
+    mockedLatest.mockReset()
+    mockedLatest.mockResolvedValue(right(undefined))
   })
 
-  it("registers exactly one slot group targeting app_bottom", async () => {
-    const bundle = mockApi()
-    await activate(bundle)
-
-    expect(bundle.registrations).toHaveLength(1)
-    expect(bundle.registrations[0]).toBeDefined()
-    expect(bundle.registrations[0].order).toBe(100)
-    expect(Object.keys(bundle.registrations[0].slots)).toEqual(["app_bottom"])
+  afterEach(() => {
+    delete process.env["XDG_STATE_HOME"]
   })
 
-  it("subscribes to the events driving worktree state", async () => {
-    const bundle = mockApi()
-    await activate(bundle)
+  describe("slot registration by label placement", () => {
+    it("registers the prompt slots by default", async () => {
+      const bundle = mockApi()
+      await activate(bundle)
 
-    expect(bundle.handlers["message.part.updated"]).toBeDefined()
-    expect(bundle.handlers["message.part.removed"]).toBeDefined()
+      expect(bundle.registrations).toHaveLength(1)
+      expect(bundle.registrations[0]?.order).toBe(100)
+      expect(Object.keys(bundle.registrations[0]?.slots ?? {})).toEqual([
+        "session_prompt_right",
+        "home_prompt_right",
+      ])
+    })
+
+    it("registers only the sidebar slot for the sidebar placement", async () => {
+      const bundle = mockApi()
+      await activate(bundle, { labelPlacement: "sidebar" })
+
+      expect(bundle.registrations).toHaveLength(1)
+      expect(bundle.registrations[0]?.order).toBe(550)
+      expect(Object.keys(bundle.registrations[0]?.slots ?? {})).toEqual(["sidebar_content"])
+    })
+
+    it("registers both prompt and sidebar slots for the both placement", async () => {
+      const bundle = mockApi()
+      await activate(bundle, { labelPlacement: "both" })
+
+      expect(bundle.registrations).toHaveLength(2)
+      expect(bundle.registrations[0]?.order).toBe(100)
+      expect(Object.keys(bundle.registrations[0]?.slots ?? {})).toEqual([
+        "session_prompt_right",
+        "home_prompt_right",
+      ])
+      expect(bundle.registrations[1]?.order).toBe(550)
+      expect(Object.keys(bundle.registrations[1]?.slots ?? {})).toEqual(["sidebar_content"])
+    })
+
+    it("registers nothing for the none placement", async () => {
+      const bundle = mockApi()
+      await activate(bundle, { labelPlacement: "none" })
+
+      expect(bundle.registrations).toHaveLength(0)
+    })
   })
 
-  it("activates without vcs state (branch unknown until TUI populates it)", async () => {
-    const bundle = mockApi()
-    await activate(bundle)
+  describe("event subscriptions", () => {
+    it("subscribes to the events driving worktree state", async () => {
+      const bundle = mockApi()
+      await activate(bundle)
 
-    expect(bundle.registrations).toHaveLength(1)
+      expect(bundle.handlers["message.part.updated"]).toBeDefined()
+      expect(bundle.handlers["message.part.removed"]).toBeDefined()
+    })
   })
 
-  it("renders the fallback label outside any session", async () => {
-    const bundle = mockApi({ branch: "main", directory: "/Users/test/src/git/config" })
-    await activate(bundle)
+  describe("prompt chip", () => {
+    it("renders nothing when no worktree qualifies", async () => {
+      const bundle = mockApi({ directory: "/Users/test/src/git/config" })
+      await activate(bundle)
 
-    expect(renderSlotLabel(bundle)).toContain("config:main")
-    expect(renderSlotLabel(bundle)).toContain("▾")
+      expect(renderSessionChip(bundle)).toBeNull()
+      expect(renderHomeChip(bundle)).toBeNull()
+    })
+
+    it("renders the worktree name after a worktree_create tool call", async () => {
+      const bundle = mockApi()
+      await activate(bundle)
+
+      dispatchPartUpdated(bundle, worktreeToolPart("worktree_create", "integ", "feat-e2e"))
+
+      const rendered = renderSessionChip(bundle)
+      expect(chipLabel(bundle)).toContain("integ-feat-e2e")
+      const chip = findNode(rendered, (node) => {
+        const props = (node as { props?: Record<string, unknown> }).props
+        return typeof props?.["onMouseUp"] === "function"
+      })
+      const props = (chip as { props: Record<string, unknown> }).props
+      expect(props["wrapMode"]).toBe("none")
+      expect(props["truncate"]).toBe(true)
+    })
+
+    it("renders the latest worktree with a count for several concurrently active ones", async () => {
+      const bundle = mockApi()
+      await activate(bundle)
+
+      dispatchPartUpdated(bundle, worktreeToolPart("worktree_create", "integ", "feat"))
+      dispatchPartUpdated(bundle, worktreeToolPart("worktree_create", "integ", "fix"))
+
+      expect(chipLabel(bundle)).toContain("integ-fix (2)")
+    })
+
+    it("renders nothing after the last worktree was merged", async () => {
+      const bundle = mockApi({ directory: "/Users/test/src/git/config" })
+      await activate(bundle)
+
+      dispatchPartUpdated(bundle, worktreeToolPart("worktree_create", "integ", "feat"))
+      dispatchPartUpdated(bundle, worktreeToolPart("worktree_merge", "integ", "feat"))
+
+      expect(renderSessionChip(bundle)).toBeNull()
+    })
+
+    it("derives the label from history when the part predates the first render", async () => {
+      const bundle = mockApi()
+      await activate(bundle)
+      bundle.parts.push(worktreeToolPart("worktree_create", "integ", "older"))
+
+      expect(chipLabel(bundle)).toContain("integ-older")
+    })
+
+    it("keeps event-derived entries when the seed scan lags behind the event", async () => {
+      const bundle = mockApi()
+      await activate(bundle)
+
+      dispatchPartUpdated(bundle, worktreeToolPart("worktree_create", "integ", "lag"), false)
+
+      expect(chipLabel(bundle)).toContain("integ-lag")
+    })
+
+    it("keeps event-derived entries across repeated events for the same part", async () => {
+      const bundle = mockApi()
+      await activate(bundle)
+
+      dispatchPartUpdated(bundle, worktreeToolPart("worktree_create", "integ", "feat"), false)
+      dispatchPartUpdated(bundle, worktreeToolPart("worktree_create", "integ", "feat"), false)
+
+      expect(chipLabel(bundle)).toContain("integ-feat")
+      expect(chipLabel(bundle)).not.toContain("(")
+    })
+
+    it("re-seeds the label when the session history syncs after the first render", async () => {
+      const bundle = mockApi()
+      await activate(bundle)
+
+      bundle.sessionMessages.length = 0
+      expect(renderSessionChip(bundle)).toBeNull()
+
+      bundle.parts.push(worktreeToolPart("worktree_create", "integ", "feat"))
+      bundle.sessionMessages.push({ id: "m1", role: "assistant" } as unknown as Message)
+      expect(chipLabel(bundle)).toContain("integ-feat")
+    })
+
+    it("ignores tool parts belonging to other sessions", async () => {
+      const bundle = mockApi()
+      await activate(bundle)
+
+      dispatchPartUpdated(
+        bundle,
+        worktreeToolPart("worktree_create", "integ", "feat", "s-other", "m-other"),
+      )
+
+      expect(renderSessionChip(bundle)).toBeNull()
+    })
+
+    it("drops all cached state when parts are removed", async () => {
+      const bundle = mockApi()
+      await activate(bundle)
+
+      dispatchPartUpdated(bundle, worktreeToolPart("worktree_create", "integ", "feat"), false)
+      expect(chipLabel(bundle)).toContain("integ-feat")
+
+      dispatchPartRemoved(bundle, "s1")
+      expect(renderSessionChip(bundle)).toBeNull()
+    })
+
+    it("shows the session directory when the session lives inside a plugin worktree", async () => {
+      const bundle = mockApi({
+        sessions: { s1: { directory: path.join(worktreeRoot, "integ-session") } },
+      })
+      await activate(bundle)
+
+      expect(chipLabel(bundle)).toContain("integ-session")
+    })
+
+    it("does not resurrect a merged session worktree via the session directory", async () => {
+      const bundle = mockApi({
+        sessions: { s1: { directory: path.join(worktreeRoot, "integ-feat") } },
+      })
+      await activate(bundle)
+
+      dispatchPartUpdated(bundle, worktreeToolPart("worktree_merge", "integ", "feat"))
+
+      expect(renderSessionChip(bundle)).toBeNull()
+    })
   })
 
-  it("renders the worktree label after a worktree_create tool call", async () => {
-    const bundle = mockApi({ branch: "main" })
-    await activate(bundle)
-    enterSession(bundle, "s1")
+  describe("recency tier", () => {
+    it("renders the recency pick once the scan resolves", async () => {
+      const bundle = mockApi({ directory: "/Users/test/src/git/config" })
+      mockedLatest.mockResolvedValue(right("integ-recency"))
+      await activate(bundle)
 
-    dispatchPartUpdated(bundle, worktreeToolPart("worktree_create", "integ", "feat-e2e"))
+      expect(renderSessionChip(bundle)).toBeNull()
+      await flush()
 
-    expect(renderSlotLabel(bundle)).toContain("integ-feat-e2e")
-    expect(renderSlotLabel(bundle)).toContain("▾")
+      expect(chipLabel(bundle)).toContain("integ-recency")
+      expect(renderHomeChip(bundle) !== null).toBe(true)
+      expect(collectStrings(renderHomeChip(bundle)).join(" ")).toContain("integ-recency")
+    })
+
+    it("scans with the session directory and the plugin root", async () => {
+      const bundle = mockApi({
+        directory: "/Users/test/src/git/config",
+        sessions: { s1: { directory: "/Users/test/src/git/integ" } },
+      })
+      await activate(bundle)
+
+      renderSessionChip(bundle)
+      expect(mockedLatest).toHaveBeenCalledTimes(1)
+      expect(mockedLatest).toHaveBeenCalledWith(
+        expect.objectContaining({
+          stat: expect.any(Function),
+          exists: expect.any(Function),
+          spawn: expect.any(Function),
+        }),
+        { preferNixDevelop: false },
+        worktreeRoot,
+        "/Users/test/src/git/integ",
+      )
+    })
+
+    it("scans once per repo path across renders", async () => {
+      const bundle = mockApi()
+      await activate(bundle)
+
+      renderSessionChip(bundle)
+      renderSessionChip(bundle)
+      await flush()
+      renderSessionChip(bundle)
+      expect(mockedLatest).toHaveBeenCalledTimes(1)
+    })
+
+    it("rescans when the repo path changes", async () => {
+      const bundle = mockApi({
+        sessions: {
+          s1: { directory: "/Users/test/src/git/integ" },
+          s2: { directory: "/Users/test/src/git/other" },
+        },
+      })
+      await activate(bundle)
+
+      renderSessionChip(bundle, "s1")
+      renderSessionChip(bundle, "s2")
+      expect(mockedLatest).toHaveBeenCalledTimes(2)
+    })
+
+    it("keeps the chip empty, logs a warning, and never rescans when the scan fails", async () => {
+      const bundle = mockApi()
+      mockedLatest.mockResolvedValue(left({ kind: "git-not-found", searchedPaths: ["/usr/bin"] }))
+      await activate(bundle)
+
+      renderSessionChip(bundle)
+      await flush()
+      renderSessionChip(bundle)
+
+      expect(renderSessionChip(bundle)).toBeNull()
+      expect(mockedLatest).toHaveBeenCalledTimes(1)
+      expect(bundle.logInputs).toHaveLength(1)
+      const logInput = bundle.logInputs[0] as {
+        level: string
+        message: string
+      }
+      expect(logInput.level).toBe("warn")
+      expect(logInput.message).toContain("git not found")
+    })
+
+    it("excludes a recency pick for a worktree merged in this session", async () => {
+      const bundle = mockApi({ directory: "/Users/test/src/git/config" })
+      mockedLatest.mockResolvedValue(right("integ-feat"))
+      await activate(bundle)
+
+      dispatchPartUpdated(bundle, worktreeToolPart("worktree_merge", "integ", "feat"))
+      renderSessionChip(bundle)
+      await flush()
+
+      expect(renderSessionChip(bundle)).toBeNull()
+    })
   })
 
-  it("renders the latest worktree with a count for several concurrently active ones", async () => {
-    const bundle = mockApi({ branch: "main" })
-    await activate(bundle)
-    enterSession(bundle, "s1")
+  describe("worktree dialog", () => {
+    it("opens a worktree dialog with absolute paths when the chip is clicked", async () => {
+      const bundle = mockApi()
+      await activate(bundle)
 
-    dispatchPartUpdated(bundle, worktreeToolPart("worktree_create", "integ", "feat"))
-    dispatchPartUpdated(bundle, worktreeToolPart("worktree_create", "integ", "fix"))
+      dispatchPartUpdated(bundle, worktreeToolPart("worktree_create", "integ", "feat"))
+      dispatchPartUpdated(bundle, worktreeToolPart("worktree_create", "integ", "fix"))
 
-    expect(renderSlotLabel(bundle)).toContain("integ-fix (2)")
-  })
+      clickWorktreeChip(bundle)
 
-  it("opens a worktree dialog with absolute paths when the label is clicked", async () => {
-    const bundle = mockApi({ branch: "main" })
-    await activate(bundle)
-    enterSession(bundle, "s1")
+      expect(bundle.replacements).toHaveLength(1)
+      const dialog = bundle.replacements[0]?.render() as {
+        props: { title: string; options: DialogOption[] }
+      }
+      expect(dialog.props.title).toBe("Active worktrees")
+      expect(dialog.props.options).toEqual([
+        {
+          title: "integ-feat",
+          value: "integ-feat",
+          description: path.join(worktreeRoot, "integ-feat"),
+        },
+        {
+          title: "integ-fix",
+          value: "integ-fix",
+          description: path.join(worktreeRoot, "integ-fix"),
+        },
+      ])
+    })
 
-    dispatchPartUpdated(bundle, worktreeToolPart("worktree_create", "integ", "feat"))
-    dispatchPartUpdated(bundle, worktreeToolPart("worktree_create", "integ", "fix"))
+    it("copies the selected worktree path to the clipboard, confirms via toast, and closes the dialog", async () => {
+      const bundle = mockApi()
+      await activate(bundle)
 
-    clickWorktreeLabel(bundle)
+      dispatchPartUpdated(bundle, worktreeToolPart("worktree_create", "integ", "feat"))
+      clickWorktreeChip(bundle)
+      expect(bundle.replacements).toHaveLength(1)
 
-    expect(bundle.replacements).toHaveLength(1)
-    const dialog = bundle.replacements[0].render() as {
-      props: { title: string; options: DialogOption[] }
-    }
-    expect(dialog.props.title).toBe("Active worktrees")
-    const worktreeRoot = path.join(os.homedir(), ".local", "state", "opencode", "worktrees")
-    expect(dialog.props.options).toEqual([
-      {
+      const worktreePath = path.join(worktreeRoot, "integ-feat")
+      const dialog = bundle.replacements[0]?.render() as {
+        props: { onSelect?: (option: DialogOption) => void }
+      }
+      dialog.props.onSelect?.({
+        title: "integ-feat",
+        value: "integ-feat",
+        description: worktreePath,
+      })
+      await flush()
+
+      expect(mockedCopy).toHaveBeenCalledWith(worktreePath)
+      expect(bundle.toasts).toEqual([
+        {
+          variant: "success",
+          title: "integ-feat",
+          message: `Copied to clipboard: ${worktreePath}`,
+        },
+      ])
+      expect(bundle.replacements).toHaveLength(0)
+    })
+
+    it("warns via toast when the clipboard copy fails", async () => {
+      const bundle = mockApi()
+      await activate(bundle)
+
+      dispatchPartUpdated(bundle, worktreeToolPart("worktree_create", "integ", "feat"))
+      clickWorktreeChip(bundle)
+
+      mockedCopy.mockResolvedValue(
+        left({ kind: "clipboard-unavailable", tried: ["pbcopy"], stderr: "boom" }),
+      )
+      const dialog = bundle.replacements[0]?.render() as {
+        props: { onSelect?: (option: DialogOption) => void }
+      }
+      dialog.props.onSelect?.({
         title: "integ-feat",
         value: "integ-feat",
         description: path.join(worktreeRoot, "integ-feat"),
-      },
-      { title: "integ-fix", value: "integ-fix", description: path.join(worktreeRoot, "integ-fix") },
-    ])
-  })
+      })
+      await flush()
 
-  it("opens a dialog with the session directory when no worktree is active", async () => {
-    const bundle = mockApi({ branch: "main", directory: "/Users/test/src/git/config" })
-    await activate(bundle)
-    enterSession(bundle, "s1")
-
-    clickWorktreeLabel(bundle)
-
-    const dialog = bundle.replacements[0].render() as {
-      props: { title: string; options: DialogOption[] }
-    }
-    expect(dialog.props.options).toEqual([
-      {
-        title: "config",
-        value: "/Users/test/src/git/config",
-        description: "/Users/test/src/git/config",
-      },
-    ])
-  })
-
-  it("copies the selected worktree path to the clipboard, confirms via toast, and closes the dialog", async () => {
-    const bundle = mockApi({ branch: "main" })
-    await activate(bundle)
-    enterSession(bundle, "s1")
-
-    dispatchPartUpdated(bundle, worktreeToolPart("worktree_create", "integ", "feat"))
-    clickWorktreeLabel(bundle)
-    expect(bundle.replacements).toHaveLength(1)
-
-    const worktreePath = path.join(
-      os.homedir(),
-      ".local",
-      "state",
-      "opencode",
-      "worktrees",
-      "integ-feat",
-    )
-    const dialog = bundle.replacements[0].render() as {
-      props: { onSelect?: (option: DialogOption) => void }
-    }
-    dialog.props.onSelect?.({
-      title: "integ-feat",
-      value: "integ-feat",
-      description: worktreePath,
+      expect(bundle.toasts[0]?.variant).toBe("warning")
+      expect(bundle.toasts[0]?.message).toContain("pbcopy")
+      expect(bundle.replacements).toHaveLength(0)
     })
-    await new Promise((resolve) => setTimeout(resolve, 0))
-
-    expect(mockedCopy).toHaveBeenCalledWith(worktreePath)
-    expect(bundle.toasts).toEqual([
-      {
-        variant: "success",
-        title: "integ-feat",
-        message: `Copied to clipboard: ${worktreePath}`,
-      },
-    ])
-    expect(bundle.replacements).toHaveLength(0)
   })
 
-  it("warns via toast when the clipboard copy fails", async () => {
-    const bundle = mockApi({ branch: "main" })
-    await activate(bundle)
-    enterSession(bundle, "s1")
+  describe("sidebar section", () => {
+    it("renders a header and one clickable item per worktree", async () => {
+      const bundle = mockApi()
+      await activate(bundle, { labelPlacement: "sidebar" })
 
-    dispatchPartUpdated(bundle, worktreeToolPart("worktree_create", "integ", "feat"))
-    clickWorktreeLabel(bundle)
+      dispatchPartUpdated(bundle, worktreeToolPart("worktree_create", "integ", "feat"))
+      dispatchPartUpdated(bundle, worktreeToolPart("worktree_create", "integ", "fix"))
 
-    mockedCopy.mockResolvedValue(
-      left({ kind: "clipboard-unavailable", tried: ["pbcopy"], stderr: "boom" }),
-    )
-    const dialog = bundle.replacements[0].render() as {
-      props: { onSelect?: (option: DialogOption) => void }
-    }
-    dialog.props.onSelect?.({
-      title: "integ-feat",
-      value: "integ-feat",
-      description: "/tmp/wt/integ-feat",
+      const rendered = renderSidebarSection(bundle)
+      expect(collectStrings(rendered).join(" ")).toContain("Git Worktrees")
+      expect(collectStrings(rendered).join(" ")).toContain("integ-feat")
+      expect(collectStrings(rendered).join(" ")).toContain("integ-fix")
+      expect(collectStrings(rendered).join(" ")).not.toContain("▼")
     })
-    await new Promise((resolve) => setTimeout(resolve, 0))
 
-    expect(bundle.toasts[0]?.variant).toBe("warning")
-    expect(bundle.toasts[0]?.message).toContain("pbcopy")
-    expect(bundle.replacements).toHaveLength(0)
-  })
+    it("renders nothing when no worktree qualifies", async () => {
+      const bundle = mockApi({ directory: "/Users/test/src/git/config" })
+      await activate(bundle, { labelPlacement: "sidebar" })
 
-  it("falls back to the directory label after worktree_merge", async () => {
-    const bundle = mockApi({ branch: "main", directory: "/Users/test/src/git/config" })
-    await activate(bundle)
-    enterSession(bundle, "s1")
+      expect(renderSidebarSection(bundle)).toBeNull()
+    })
 
-    dispatchPartUpdated(bundle, worktreeToolPart("worktree_create", "integ", "feat"))
-    dispatchPartUpdated(bundle, worktreeToolPart("worktree_merge", "integ", "feat"))
+    it("copies the clicked worktree's path and confirms via toast without a dialog", async () => {
+      const bundle = mockApi()
+      await activate(bundle, { labelPlacement: "sidebar" })
 
-    expect(renderSlotLabel(bundle)).toContain("config:main")
-  })
+      dispatchPartUpdated(bundle, worktreeToolPart("worktree_create", "integ", "feat"))
+      clickNode(bundle, renderSidebarSection(bundle), (node) => {
+        const props = (node as { props?: Record<string, unknown> }).props
+        return typeof props?.["onMouseUp"] === "function"
+      })
+      await flush()
 
-  it("derives the label from history when the part predates the first render", async () => {
-    const bundle = mockApi({ branch: "main" })
-    await activate(bundle)
-    enterSession(bundle, "s1")
-    bundle.parts.push(worktreeToolPart("worktree_create", "integ", "older"))
+      expect(mockedCopy).toHaveBeenCalledWith(path.join(worktreeRoot, "integ-feat"))
+      expect(bundle.toasts).toEqual([
+        {
+          variant: "success",
+          title: "integ-feat",
+          message: `Copied to clipboard: ${path.join(worktreeRoot, "integ-feat")}`,
+        },
+      ])
+      expect(bundle.replacements).toHaveLength(0)
+    })
 
-    expect(renderSlotLabel(bundle)).toContain("integ-older")
-  })
+    it("collapses and expands the item list via the header when there are more than two items", async () => {
+      const bundle = mockApi()
+      await activate(bundle, { labelPlacement: "sidebar" })
 
-  it("keeps event-derived entries when the seed scan lags behind the event", async () => {
-    const bundle = mockApi({ branch: "main" })
-    await activate(bundle)
-    enterSession(bundle, "s1")
+      dispatchPartUpdated(bundle, worktreeToolPart("worktree_create", "integ", "feat"))
+      dispatchPartUpdated(bundle, worktreeToolPart("worktree_create", "integ", "fix"))
+      dispatchPartUpdated(bundle, worktreeToolPart("worktree_create", "integ", "chore"))
 
-    dispatchPartUpdated(bundle, worktreeToolPart("worktree_create", "integ", "lag"), false)
+      const header = (node: object): boolean => {
+        const props = (node as { props?: Record<string, unknown> }).props
+        return typeof props?.["onMouseUp"] === "function" && props["fg"] === "#eeeeee"
+      }
+      expect(sidebarLabel(bundle)).toContain("▼")
 
-    expect(renderSlotLabel(bundle)).toContain("integ-lag")
-  })
+      clickNode(bundle, renderSidebarSection(bundle), header)
+      const collapsedLabel = sidebarLabel(bundle)
+      expect(collapsedLabel).toContain("▶")
+      expect(collapsedLabel).not.toContain("integ-fix")
 
-  it("keeps event-derived entries across repeated events for the same part", async () => {
-    const bundle = mockApi({ branch: "main", directory: "/Users/test/src/git/config" })
-    await activate(bundle)
-    enterSession(bundle, "s1")
+      clickNode(bundle, renderSidebarSection(bundle), header)
+      const expandedLabel = sidebarLabel(bundle)
+      expect(expandedLabel).toContain("▼")
+      expect(expandedLabel).toContain("integ-fix")
+    })
 
-    dispatchPartUpdated(bundle, worktreeToolPart("worktree_create", "integ", "feat"), false)
-    dispatchPartUpdated(bundle, worktreeToolPart("worktree_create", "integ", "feat"), false)
+    it("does not offer a collapse toggle for two or fewer items", async () => {
+      const bundle = mockApi()
+      await activate(bundle, { labelPlacement: "sidebar" })
 
-    expect(renderSlotLabel(bundle)).toContain("integ-feat")
-    expect(renderSlotLabel(bundle)).not.toContain("+")
-  })
+      dispatchPartUpdated(bundle, worktreeToolPart("worktree_create", "integ", "feat"))
+      dispatchPartUpdated(bundle, worktreeToolPart("worktree_create", "integ", "fix"))
 
-  it("re-seeds the label when the session history syncs after the first render", async () => {
-    const bundle = mockApi({ branch: "main", directory: "/Users/test/src/git/config" })
-    await activate(bundle)
-    enterSession(bundle, "s1")
-
-    bundle.sessionMessages.length = 0
-    expect(renderSlotLabel(bundle)).toContain("config:main")
-
-    bundle.parts.push(worktreeToolPart("worktree_create", "integ", "feat"))
-    bundle.sessionMessages.push({ id: "m1", role: "assistant" } as unknown as Message)
-    expect(renderSlotLabel(bundle)).toContain("integ-feat")
-  })
-
-  it("keeps event-derived entries across renders that do not change the message count", async () => {
-    const bundle = mockApi({ branch: "main", directory: "/Users/test/src/git/config" })
-    await activate(bundle)
-    enterSession(bundle, "s1")
-
-    dispatchPartUpdated(bundle, worktreeToolPart("worktree_create", "integ", "lag"), false)
-
-    expect(renderSlotLabel(bundle)).toContain("integ-lag")
-    expect(renderSlotLabel(bundle)).toContain("integ-lag")
-  })
-
-  it("ignores tool parts belonging to other sessions", async () => {
-    const bundle = mockApi({ branch: "main", directory: "/Users/test/src/git/config" })
-    await activate(bundle)
-    enterSession(bundle, "s1")
-
-    dispatchPartUpdated(
-      bundle,
-      worktreeToolPart("worktree_create", "integ", "feat", "s-other", "m-other"),
-    )
-
-    expect(renderSlotLabel(bundle)).toContain("config:main")
+      const clickable = findAllNodes(renderSidebarSection(bundle), (node) => {
+        const props = (node as { props?: Record<string, unknown> }).props
+        return typeof props?.["onMouseUp"] === "function"
+      })
+      expect(clickable).toHaveLength(2)
+      expect(sidebarLabel(bundle)).not.toContain("▶")
+    })
   })
 })

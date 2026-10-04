@@ -1,134 +1,140 @@
-import { Show } from "solid-js"
+import { createSignal } from "solid-js"
+import type { JSX } from "@opentui/solid"
 import * as path from "node:path"
 import type { Message, Part } from "@opencode-ai/sdk/v2"
 import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui"
 import type { PluginOptions } from "./types.js"
-import { resolveOptions } from "./types.js"
-import { hasFlakeNix } from "./lib/git-env.js"
+import { isLeft, resolveOptions, toErrorMessage } from "./types.js"
 import { copyToClipboard } from "./lib/clipboard.js"
-import { isLeft, toErrorMessage } from "./types.js"
-import { getWorktreeRoot } from "./lib/paths.js"
+import { createLogger } from "./lib/logger.js"
+import { resolveWorktreeRoot } from "./lib/paths.js"
+import { defaultExists, defaultSpawn } from "./lib/git-env.js"
+import { defaultStat, latestWorktree } from "./lib/worktree-recency.js"
+import { currentWorktreeEntries } from "./lib/current-worktree.js"
+import { formatWorktreeEntries } from "./lib/status-label.js"
 import {
-  activeWorktreesFrom,
+  activeWorktrees,
+  closedWorktreeNames,
   collectWorktreeCalls,
   extractWorktreeCalls,
   recordWorktreeCall,
-  type ActiveWorktree,
   type WorktreeToolCall,
 } from "./lib/active-worktree.js"
-import { formatSessionStatusLabel, formatSessionStatus } from "./lib/status-label.js"
 
 const MAX_SEED_MESSAGES = 200
 
-const defaultExists = async (filePath: string): Promise<boolean> => {
-  try {
-    const fs = await import("node:fs/promises")
-    await fs.access(filePath)
-    return true
-  } catch {
-    return false
-  }
-}
-
 const tuiPlugin: TuiPlugin = async (api, options) => {
   const opts = resolveOptions(options as PluginOptions | undefined)
+  const worktreeRoot = await resolveWorktreeRoot(defaultExists)
+  const logger = createLogger(
+    {
+      app: {
+        log: (input) => api.client.app.log(input.body),
+      },
+    },
+    "opencode-worktree-plugin",
+  )
 
-  let flakePresent = false
-  try {
-    flakePresent = await hasFlakeNix(api.state.path.directory, defaultExists)
-  } catch {
-    flakePresent = false
-  }
+  const showPrompt = opts.labelPlacement === "prompt" || opts.labelPlacement === "both"
+  const showSidebar = opts.labelPlacement === "sidebar" || opts.labelPlacement === "both"
 
-  const worktreeRoot = getWorktreeRoot()
+  const seedCache = new Map<
+    string,
+    { readonly calls: readonly WorktreeToolCall[]; readonly messageCount: number }
+  >()
+  const eventCallsBySession = new Map<string, readonly WorktreeToolCall[]>()
 
-  let seedCalls: readonly WorktreeToolCall[] = []
-  let eventCalls: readonly WorktreeToolCall[] = []
-  let seedSession: string | undefined = undefined
-  let seedMessageCount = -1
-  let eventSession: string | undefined = undefined
-
-  const seedCallsForSession = (sid: string, messages: readonly Message[]): void => {
-    seedCalls = collectWorktreeCalls(
+  const reseedCalls = (sid: string, messages: readonly Message[]): readonly WorktreeToolCall[] => {
+    const calls = collectWorktreeCalls(
       messages.slice(-MAX_SEED_MESSAGES),
       (messageID) => api.state.part(messageID) as readonly Part[],
     )
-    seedSession = sid
-    seedMessageCount = messages.length
+    seedCache.set(sid, { calls, messageCount: messages.length })
+    return calls
   }
 
-  const ensureWorktreeEntries = (sid: string | undefined): readonly ActiveWorktree[] => {
+  const sessionCalls = (sid: string | undefined): readonly WorktreeToolCall[] => {
     if (sid === undefined) return []
     const messages: readonly Message[] = api.state.session.messages(sid)
-    if (seedSession !== sid || messages.length !== seedMessageCount)
-      seedCallsForSession(sid, messages)
-    if (eventSession !== sid) {
-      eventCalls = []
-      eventSession = sid
-    }
-    return activeWorktreesFrom(seedCalls, eventCalls)
+    const cached = seedCache.get(sid)
+    const seed =
+      cached !== undefined && cached.messageCount === messages.length
+        ? cached.calls
+        : reseedCalls(sid, messages)
+    return [...seed, ...(eventCallsBySession.get(sid) ?? [])]
   }
 
-  const currentSessionID = (): string | undefined => {
-    const route = api.route.current
-    if (route.name !== "session") return undefined
-    return route.params?.sessionID
-  }
+  const [recencyByRepo, setRecencyByRepo] = createSignal<ReadonlyMap<string, string | undefined>>(
+    new Map(),
+  )
+  let scanKey: string | undefined = undefined
 
-  const currentStatusText = (): string => {
-    const sid = currentSessionID()
-    if (!sid) return ""
-    return formatSessionStatus(api.state.session.status(sid))
-  }
-
-  const currentStatusLabel = (): string => {
-    const entries = ensureWorktreeEntries(currentSessionID())
-    return formatSessionStatusLabel(
-      api.state.path.directory,
-      api.state.vcs?.branch,
+  const ensureRecency = (repoPath: string): void => {
+    if (scanKey === repoPath || recencyByRepo().has(repoPath)) return
+    scanKey = repoPath
+    void latestWorktree(
+      { stat: defaultStat, exists: defaultExists, spawn: defaultSpawn },
+      { preferNixDevelop: opts.preferNixDevelop },
       worktreeRoot,
-      entries,
-    )
+      repoPath,
+    ).then((result) => {
+      if (scanKey !== repoPath) return
+      if (isLeft(result)) {
+        void logger.log("warn", `Worktree recency scan failed: ${toErrorMessage(result.failure)}`)
+      }
+      const next = new Map(recencyByRepo())
+      next.set(repoPath, isLeft(result) ? undefined : result.success)
+      setRecencyByRepo(next)
+    })
+  }
+
+  const labelEntries = (sid: string | undefined): readonly string[] => {
+    const calls = sessionCalls(sid)
+    const sessionDirectory = sid === undefined ? undefined : api.state.session.get(sid)?.directory
+    const repoPath = sessionDirectory ?? api.state.path.directory
+    ensureRecency(repoPath)
+    return currentWorktreeEntries({
+      active: activeWorktrees(calls),
+      closedNames: closedWorktreeNames(calls),
+      sessionDirectory,
+      worktreeRoot,
+      recencyName: recencyByRepo().get(repoPath),
+    })
+  }
+
+  const copyWorktreePath = async (name: string, target: string): Promise<void> => {
+    const result = await copyToClipboard(target)
+    if (isLeft(result)) {
+      api.ui.toast({
+        variant: "warning",
+        title: name,
+        message: toErrorMessage(result.failure),
+      })
+    } else {
+      api.ui.toast({
+        variant: "success",
+        title: name,
+        message: `Copied to clipboard: ${target}`,
+      })
+    }
   }
 
   const handleWorktreeSelect = async (option: {
     readonly title: string
     readonly description?: string
   }): Promise<void> => {
-    const target = option.description ?? option.title
-    const result = await copyToClipboard(target)
-    if (isLeft(result)) {
-      api.ui.toast({
-        variant: "warning",
-        title: option.title,
-        message: toErrorMessage(result.failure),
-      })
-    } else {
-      api.ui.toast({
-        variant: "success",
-        title: option.title,
-        message: `Copied to clipboard: ${target}`,
-      })
-    }
+    await copyWorktreePath(option.title, option.description ?? option.title)
     api.ui.dialog.clear()
   }
 
-  const openWorktreeDialog = (): void => {
-    const entries = ensureWorktreeEntries(currentSessionID())
-    const options =
-      entries.length > 0
-        ? entries.map((name) => ({
-            title: name,
-            value: name,
-            description: path.join(worktreeRoot, name),
-          }))
-        : [
-            {
-              title: path.basename(api.state.path.directory),
-              value: api.state.path.directory,
-              description: api.state.path.directory,
-            },
-          ]
+  const openWorktreeDialog = (sid: string | undefined): void => {
+    const entries = labelEntries(sid)
+    if (entries.length === 0) return
+    const options = entries.map((name) => ({
+      title: name,
+      value: name,
+      description: path.join(worktreeRoot, name),
+    }))
     api.ui.dialog.replace(() =>
       api.ui.DialogSelect<string>({
         title: "Active worktrees",
@@ -139,57 +145,89 @@ const tuiPlugin: TuiPlugin = async (api, options) => {
     )
   }
 
-  api.slots.register({
-    order: 100,
-    slots: {
-      app_bottom: () => {
-        const t = api.theme.current
-        return (
-          <box
-            width="100%"
-            flexDirection="row"
-            gap={2}
-            paddingLeft={1}
-            paddingRight={1}
-            flexShrink={0}
-          >
-            <text fg={t.textMuted} onMouseUp={openWorktreeDialog}>
-              {currentStatusLabel()} ▾
-            </text>
-            <Show when={currentStatusText()}>
-              {(status) => <text fg={t.info}>[{status()}]</text>}
-            </Show>
-            <box flexGrow={1} />
-            <Show when={opts.preferNixDevelop && flakePresent}>
-              <text fg={t.accent}>nix</text>
-            </Show>
-          </box>
-        )
+  const [collapsed, setCollapsed] = createSignal(false)
+  const toggleCollapsed = (): void => {
+    setCollapsed(!collapsed())
+  }
+
+  const renderPromptChip = (sid: string | undefined): JSX.Element => {
+    const entries = labelEntries(sid)
+    if (entries.length === 0) return null
+    const t = api.theme.current
+    return (
+      <text fg={t.accent} wrapMode="none" truncate onMouseUp={() => openWorktreeDialog(sid)}>
+        {formatWorktreeEntries(entries)}
+      </text>
+    )
+  }
+
+  const renderSidebarSection = (sid: string | undefined): JSX.Element => {
+    const entries = labelEntries(sid)
+    if (entries.length === 0) return null
+    const t = api.theme.current
+    const collapsible = entries.length > 2
+    const isCollapsed = collapsible && collapsed()
+    const headerText = collapsible ? `Git Worktrees ${isCollapsed ? "▶" : "▼"}` : "Git Worktrees"
+    const header = collapsible ? (
+      <text fg={t.text} onMouseUp={toggleCollapsed}>
+        <b>{headerText}</b>
+      </text>
+    ) : (
+      <text fg={t.text}>
+        <b>Git Worktrees</b>
+      </text>
+    )
+    return (
+      <box flexDirection="column">
+        {header}
+        {isCollapsed
+          ? null
+          : entries.map((name) => (
+              <text
+                fg={t.accent}
+                onMouseUp={() => void copyWorktreePath(name, path.join(worktreeRoot, name))}
+              >
+                {name}
+              </text>
+            ))}
+      </box>
+    )
+  }
+
+  if (showPrompt) {
+    api.slots.register({
+      order: 100,
+      slots: {
+        session_prompt_right: (_ctx, props) => renderPromptChip(props.session_id),
+        home_prompt_right: () => renderPromptChip(undefined),
       },
-    },
-  })
+    })
+  }
+
+  if (showSidebar) {
+    api.slots.register({
+      order: 550,
+      slots: {
+        sidebar_content: (_ctx, props) => renderSidebarSection(props.session_id),
+      },
+    })
+  }
 
   api.event.on("message.part.updated", (event) => {
-    const sid = currentSessionID()
-    const partSessionID = (event.properties.part as { sessionID?: string }).sessionID
-    if (sid === undefined || partSessionID !== sid) return
-    const calls = extractWorktreeCalls([event.properties.part as Part])
+    const part = event.properties.part as Part & { sessionID?: string }
+    const sid = part.sessionID
+    if (sid === undefined) return
+    const calls = extractWorktreeCalls([part])
     if (calls.length === 0) return
-    if (eventSession !== sid) {
-      eventCalls = []
-      eventSession = sid
-    }
-    eventCalls = calls.reduce(recordWorktreeCall, eventCalls)
+    const recorded = eventCallsBySession.get(sid) ?? []
+    eventCallsBySession.set(sid, calls.reduce(recordWorktreeCall, recorded))
   })
 
   api.event.on("message.part.removed", (event) => {
-    const sid = currentSessionID()
-    if (sid === undefined || event.properties.sessionID !== sid) return
-    if (seedSession === sid) seedSession = undefined
-    if (eventSession === sid) {
-      eventCalls = []
-      eventSession = undefined
-    }
+    const sid = (event.properties as { sessionID?: string }).sessionID
+    if (sid === undefined) return
+    seedCache.delete(sid)
+    eventCallsBySession.delete(sid)
   })
 }
 

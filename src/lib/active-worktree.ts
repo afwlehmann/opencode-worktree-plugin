@@ -48,11 +48,14 @@ export const collectWorktreeCalls = (
 ): readonly WorktreeToolCall[] =>
   messages.flatMap((message) => extractWorktreeCalls(getParts(message.id)))
 
+export const worktreeCallName = (call: WorktreeToolCall): string =>
+  `${call.repoShort}-${call.sourceBranch}`
+
 export const stepActiveWorktrees = (
   active: readonly string[],
   call: WorktreeToolCall,
 ): readonly string[] => {
-  const name = `${call.repoShort}-${call.sourceBranch}`
+  const name = worktreeCallName(call)
   const withoutName = active.filter((entry) => entry !== name)
   return call.tool === "worktree_create" ? [...withoutName, name] : withoutName
 }
@@ -73,3 +76,6 @@ export const activeWorktreesFrom = (
   history: readonly WorktreeToolCall[],
   recorded: readonly WorktreeToolCall[],
 ): readonly string[] => activeWorktrees([...history, ...recorded])
+
+export const closedWorktreeNames = (calls: readonly WorktreeToolCall[]): readonly string[] =>
+  calls.filter((call) => call.tool !== "worktree_create").map(worktreeCallName)

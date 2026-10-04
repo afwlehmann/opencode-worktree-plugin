@@ -1,4 +1,15 @@
-import type { OpencodeClient } from "@opencode-ai/sdk"
+export type LogClient = {
+  readonly app: {
+    log: (input: {
+      readonly body: {
+        readonly service: string
+        readonly level: LogLevel
+        readonly message: string
+        readonly extra?: Record<string, unknown>
+      }
+    }) => Promise<unknown>
+  }
+}
 
 export type LogLevel = "debug" | "info" | "warn" | "error"
 
@@ -6,7 +17,7 @@ export type Logger = {
   readonly log: (level: LogLevel, message: string, extra?: Record<string, unknown>) => Promise<void>
 }
 
-export const createLogger = (client: OpencodeClient, service: string): Logger => ({
+export const createLogger = (client: LogClient, service: string): Logger => ({
   async log(level, message, extra) {
     const body = {
       service,

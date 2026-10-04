@@ -3,10 +3,12 @@ import type { Message, Part } from "@opencode-ai/sdk/v2"
 import {
   activeWorktrees,
   activeWorktreesFrom,
+  closedWorktreeNames,
   collectWorktreeCalls,
   extractWorktreeCalls,
   recordWorktreeCall,
   stepActiveWorktrees,
+  worktreeCallName,
   type WorktreeToolCall,
 } from "./active-worktree.js"
 
@@ -204,6 +206,31 @@ describe("recordWorktreeCall", () => {
   it("collapses repeated events for the same part by key fallback", () => {
     const recorded = recordWorktreeCall([], createCall())
     expect(recordWorktreeCall(recorded, createCall())).toEqual([createCall()])
+  })
+})
+
+describe("worktreeCallName", () => {
+  it("joins the repo short name and source branch", () => {
+    expect(worktreeCallName(createCall("integ", "feat"))).toBe("integ-feat")
+  })
+})
+
+describe("closedWorktreeNames", () => {
+  it("collects the merge and remove call targets", () => {
+    const calls = [
+      createCall("integ", "feat"),
+      mergeCall("integ", "feat"),
+      removeCall("integ", "fix"),
+    ]
+    expect(closedWorktreeNames(calls)).toEqual(["integ-feat", "integ-fix"])
+  })
+
+  it("ignores create calls", () => {
+    expect(closedWorktreeNames([createCall("integ", "feat")])).toEqual([])
+  })
+
+  it("returns empty for an empty call list", () => {
+    expect(closedWorktreeNames([])).toEqual([])
   })
 })
 

@@ -9,6 +9,7 @@ import {
   mapError,
   toErrorMessage,
   resolveOptions,
+  type LabelPlacement,
   type MergeStrategy,
   type PermissionMode,
   type WorktreeError,
@@ -174,6 +175,7 @@ describe("resolveOptions", () => {
       preferNixDevelop: false,
       mergeStrategy: "ff-only",
       permissionMode: "all-worktrees",
+      labelPlacement: "prompt",
     })
   })
 
@@ -182,6 +184,7 @@ describe("resolveOptions", () => {
       preferNixDevelop: false,
       mergeStrategy: "repo-config",
       permissionMode: "all-worktrees",
+      labelPlacement: "prompt",
     })
   })
 
@@ -197,5 +200,17 @@ describe("resolveOptions", () => {
   it("falls back to all-worktrees for unrecognized permission mode values", () => {
     const bogus = "bogus" as unknown as PermissionMode
     expect(resolveOptions({ permissionMode: bogus }).permissionMode).toBe("all-worktrees")
+  })
+
+  it("resolves each label placement", () => {
+    const placements: readonly LabelPlacement[] = ["prompt", "sidebar", "both", "none"]
+    expect(
+      placements.map((labelPlacement) => resolveOptions({ labelPlacement }).labelPlacement),
+    ).toEqual(placements)
+  })
+
+  it("falls back to prompt for unrecognized label placement values", () => {
+    const bogus = "bottom-bar" as unknown as LabelPlacement
+    expect(resolveOptions({ labelPlacement: bogus }).labelPlacement).toBe("prompt")
   })
 })

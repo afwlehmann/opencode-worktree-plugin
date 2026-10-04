@@ -4,22 +4,31 @@ export type MergeStrategy = "ff-only" | "repo-config"
 
 export type PermissionMode = "all-worktrees" | "pedantic"
 
+export type LabelPlacement = "prompt" | "sidebar" | "both" | "none"
+
+const LABEL_PLACEMENTS: readonly string[] = ["prompt", "sidebar", "both", "none"]
+
 export type PluginOptions = {
   readonly preferNixDevelop?: boolean
   readonly mergeStrategy?: MergeStrategy
   readonly permissionMode?: PermissionMode
+  readonly labelPlacement?: LabelPlacement
 }
 
 export type ResolvedOptions = {
   readonly preferNixDevelop: boolean
   readonly mergeStrategy: MergeStrategy
   readonly permissionMode: PermissionMode
+  readonly labelPlacement: LabelPlacement
 }
 
 export const resolveOptions = (options?: PluginOptions): ResolvedOptions => ({
   preferNixDevelop: options?.preferNixDevelop ?? false,
   mergeStrategy: options?.mergeStrategy === "repo-config" ? "repo-config" : "ff-only",
   permissionMode: options?.permissionMode === "pedantic" ? "pedantic" : "all-worktrees",
+  labelPlacement: LABEL_PLACEMENTS.includes(options?.labelPlacement ?? "")
+    ? (options?.labelPlacement as LabelPlacement)
+    : "prompt",
 })
 
 export type WorktreeInfo = {
