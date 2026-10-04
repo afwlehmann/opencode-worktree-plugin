@@ -6,7 +6,7 @@
     flake-utils.url = "github:numtide/flake-utils";
     git-hooks.url = "github:cachix/git-hooks.nix";
     opencode = {
-      url = "github:anomalyco/opencode/v1.18.25";
+      url = "github:anomalyco/opencode/v1.18.31";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
@@ -41,7 +41,7 @@
           pname = "opencode-worktree-plugin";
           version = (lib.importJSON ./package.json).version;
           src = ./.;
-          npmDepsHash = "sha256-ys3XDj4C29Z+2ndpPdwn8TfzGczHyy34/O9F3vfeIU0=";
+          npmDepsHash = "sha256-i11baPtPRCFUYjj1jYWOvFuHNYVHr1ozUO8PdqAGuo8=";
           npmDepsFetcherVersion = 2;
           makeCacheWritable = true;
           npmFlags = [ "--legacy-peer-deps" ];
